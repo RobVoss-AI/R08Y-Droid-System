@@ -1,0 +1,86 @@
+# R08Y Droid System Configuration
+# Copy this file to config.yaml and fill in your API keys.
+
+camera:
+  device_index: 0        # USB webcam device index
+  width: 640
+  height: 480
+  fps: 30
+
+face_detection:
+  method: haar           # "haar" (fast) or "dnn" (accurate)
+  scale_factor: 1.3      # Haar cascade scale factor
+  min_neighbors: 5       # Haar cascade min neighbors
+  detection_width: 320   # Downscale width for detection performance
+  confidence_threshold: 0.5  # DNN confidence threshold
+
+face_recognition:
+  db_path: data/faces.db
+  tolerance: 0.6         # Lower = stricter matching (0.0-1.0)
+  max_encodings_per_person: 5
+  cache_ttl_seconds: 5   # Reuse recent recognition result within TTL
+
+servos:
+  enabled: true
+  driver: auto           # "pca9685", "gpio", "mock", or "auto" (auto-detect)
+  i2c_address: 0x40
+  pan_channel: 0
+  tilt_channel: 1
+  pan_min: 30
+  pan_max: 150
+  tilt_min: 30
+  tilt_max: 150
+  home_pan: 90
+  home_tilt: 90
+  speed: 120             # Degrees per second for smooth movement
+
+tracker:
+  pid_kp: 0.05
+  pid_ki: 0.01
+  pid_kd: 0.02
+  dead_zone: 0.05        # Fraction of frame to ignore (prevents jitter)
+  patrol_speed: 30       # Degrees per second during patrol scan
+  no_face_timeout: 5.0   # Seconds before switching to patrol mode
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 512
+  device_index: null     # null = auto-detect USB mic
+  rms_threshold: 500     # Silence detection threshold
+  silence_duration: 1.5  # Seconds of silence before ending recording
+  max_record_seconds: 30
+
+wake_word:
+  engine: porcupine      # "porcupine" or "rms" (simple noise trigger)
+  porcupine_access_key: YOUR_PICOVOICE_KEY_HERE
+  keyword_path: null     # Path to custom .ppn file, or null for built-in
+  sensitivity: 0.5       # Wake word sensitivity (0.0-1.0)
+
+stt:
+  provider: groq         # "openai" or "groq"
+  openai_api_key: YOUR_OPENAI_KEY_HERE
+  groq_api_key: YOUR_GROQ_KEY_HERE
+  model: whisper-large-v3
+  language: en
+
+ai:
+  api_key: YOUR_ANTHROPIC_KEY_HERE
+  model: claude-sonnet-4-20250514
+  max_history_turns: 20
+  system_prompt: |
+    You are R08Y, a friendly and helpful droid assistant. You have a physical
+    body with a camera and can see the people you talk to. You recognize faces
+    and remember conversations. Keep responses conversational and concise —
+    you're speaking out loud, not writing an essay.
+  conversations_db_path: data/conversations.db
+
+tts:
+  voice: en-US-GuyNeural  # Microsoft Edge TTS voice
+  rate: "+0%"             # Speech rate adjustment
+  volume: "+0%"           # Volume adjustment
+  playback_command: aplay  # "aplay" (ALSA) or "mpv"
+
+logging:
+  level: INFO             # DEBUG, INFO, WARNING, ERROR
+  file: null              # Log file path, or null for stdout only

@@ -1,0 +1,24 @@
+[Unit]
+Description=R08Y Droid System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/r08y
+ExecStart=/opt/r08y/venv/bin/python -m r08y
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+# Allow access to hardware
+SupplementaryGroups=i2c video audio gpio
+
+# Graceful shutdown
+TimeoutStopSec=10
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
