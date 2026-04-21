@@ -84,3 +84,36 @@ tts:
 logging:
   level: INFO             # DEBUG, INFO, WARNING, ERROR
   file: null              # Log file path, or null for stdout only
+
+# ── Skills Configuration ──────────────────────────────────────────
+# Each skill can be disabled globally or configured individually.
+# Skills auto-discover from r08y/skills/ — no code changes needed.
+
+skills:
+  disabled: []            # List skill names to disable, e.g. ["led_controller", "home_assistant"]
+
+  # Weather (uses free Open-Meteo API — no key needed)
+  weather:
+    latitude: 37.7749
+    longitude: -122.4194
+    location_name: San Francisco
+
+  # Home Assistant integration
+  home_assistant:
+    url: http://homeassistant.local:8123
+    token: YOUR_HA_TOKEN_HERE
+    entities:               # Map friendly names → HA entity IDs
+      lights: light.living_room
+      bedroom light: light.bedroom
+      fan: switch.fan
+
+  # Distance sensor (HC-SR04)
+  distance_sensor:
+    trig_pin: 23
+    echo_pin: 24
+    approach_threshold: 50  # cm
+
+  # LED controller (NeoPixel / WS2812)
+  led_controller:
+    num_pixels: 12
+    brightness: 30          # 1-100

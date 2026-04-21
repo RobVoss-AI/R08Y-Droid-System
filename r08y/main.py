@@ -25,6 +25,7 @@ from r08y.modules.voice_input import VoiceInput
 from r08y.modules.speech_to_text import create_stt_provider
 from r08y.modules.ai_brain import AIBrain, VisualContext
 from r08y.modules.text_to_speech import TextToSpeech
+from r08y.skills import SkillManager
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ async def vision_pipeline(
     face_tracker: FaceTracker,
     state: DroidState,
     shutdown: asyncio.Event,
+    skill_manager: Optional[SkillManager] = None,
 ) -> None:
     """Continuous vision loop: detect faces, track with servos, recognize."""
     if not camera.available:
@@ -80,6 +82,11 @@ async def vision_pipeline(
         # Face detection (fast, every frame)
         detections = await face_detector.detect(frame)
         state.current_faces = detections
+
+        # Dispatch to skill pipeline hooks
+        if skill_manager:
+            await skill_manager.on_vision_frame(frame)
+            await skill_manager.on_vision_detections(frame, detections)
 
         # Face tracking — use the largest face
         if detections:
@@ -114,6 +121,7 @@ async def voice_pipeline(
     face_recognizer: FaceRecognizer,
     state: DroidState,
     shutdown: asyncio.Event,
+    skill_manager: Optional[SkillManager] = None,
 ) -> None:
     """Event-driven voice loop: wake → record → transcribe → think → speak."""
     if not voice_input.available:
@@ -152,28 +160,47 @@ async def voice_pipeline(
             continue
 
         logger.info("User said: '%s'", text)
+        user_name = state.recognized.name if state.recognized and state.recognized.is_known else "unknown"
 
-        # Check for special commands
+        # 1. Check skill commands first (plugin system)
+        if skill_manager:
+            match = skill_manager.match_command(text)
+            if match:
+                cmd, trigger = match
+                logger.info("Skill command matched: '%s' → %s", trigger, cmd.skill_name)
+                response = await cmd.handler(text, user_name)
+                if response:
+                    await tts.speak_and_wait(response)
+                continue
+
+            # Let skills intercept before AI (e.g., dictation mode)
+            intercepted = await skill_manager.on_voice_pre_ai(text, user_name)
+            if intercepted is not None:
+                await tts.speak_and_wait(intercepted)
+                continue
+
+        # 2. Check built-in special commands
         command = brain.check_special_command(text)
         if command:
             await _handle_special_command(
-                command, text, face_recognizer, tts, state,
-                await camera_ref_holder.get() if hasattr(camera_ref_holder, 'get') else None,
+                command, text, face_recognizer, tts, state, camera_ref_holder,
             )
             continue
 
-        # Build visual context for Claude
+        # 3. Send to AI brain
         visual = VisualContext(
             faces_visible=len(state.current_faces),
             recognized_name=state.recognized.name if state.recognized else None,
             is_known=state.recognized.is_known if state.recognized else False,
         )
-        user_name = state.recognized.name if state.recognized and state.recognized.is_known else "unknown"
 
-        # Get AI response
         state.is_listening = False
         state.is_speaking = True
         response = await brain.think(text, visual, user_name)
+
+        # Let skills transform response before TTS
+        if skill_manager:
+            response = await skill_manager.on_voice_post_ai(response)
 
         # Speak the response
         await tts.speak_and_wait(response)
@@ -274,7 +301,7 @@ async def run(config_path: str = "config.yaml") -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _signal_handler)
 
-    # Start all modules
+    # Start all core modules
     logger.info("Initializing modules...")
     await asyncio.gather(
         camera.start(),
@@ -289,7 +316,33 @@ async def run(config_path: str = "config.yaml") -> None:
     global camera_ref_holder
     camera_ref_holder = camera
 
-    logger.info("All modules initialized — R08Y is online!")
+    # Load and start skills
+    import yaml
+    raw_config = {}
+    from pathlib import Path
+    config_file = Path(config_path)
+    if config_file.exists():
+        with open(config_file) as f:
+            raw_config = yaml.safe_load(f) or {}
+
+    available_hw = set()
+    if camera.available:
+        available_hw.add("camera")
+    if servo.available:
+        available_hw.add("servos")
+    if voice_input.available:
+        available_hw.add("microphone")
+    if tts.available:
+        available_hw.add("tts")
+    available_hw.add("network")  # assume network if we got this far
+
+    skill_manager = SkillManager(raw_config)
+    skill_manager.load_skills(available_hw)
+    await skill_manager.setup_all(servo, tts, camera, state)
+    await skill_manager.start_all()
+
+    loaded = skill_manager.loaded_skills
+    logger.info("All modules initialized — R08Y is online! (%d skills loaded)", len(loaded))
 
     # Speak startup greeting
     if tts.available:
@@ -298,8 +351,8 @@ async def run(config_path: str = "config.yaml") -> None:
     # Run pipelines concurrently
     try:
         await asyncio.gather(
-            vision_pipeline(camera, face_detector, face_recognizer, face_tracker, state, shutdown),
-            voice_pipeline(voice_input, stt, brain, tts, face_recognizer, state, shutdown),
+            vision_pipeline(camera, face_detector, face_recognizer, face_tracker, state, shutdown, skill_manager),
+            voice_pipeline(voice_input, stt, brain, tts, face_recognizer, state, shutdown, skill_manager),
             _shutdown_waiter(shutdown),
         )
     except Exception:
@@ -307,6 +360,7 @@ async def run(config_path: str = "config.yaml") -> None:
     finally:
         # Graceful shutdown
         logger.info("Shutting down...")
+        await skill_manager.stop_all()
         await asyncio.gather(
             camera.stop(),
             servo.stop(),
