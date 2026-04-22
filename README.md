@@ -114,6 +114,10 @@ r08y/
     ├── timer_alarm/        # Countdown timers with alerts
     ├── weather/            # Open-Meteo weather forecasts
     ├── home_assistant/     # Smart home control via HA API
+    ├── presentation/       # Timed talks with camera choreography
+    ├── storyteller/        # Dramatic stories with mood-driven delivery
+    ├── daily_briefing/     # Morning/evening weather + time summary
+    ├── greeter/            # Welcome recognized people by name
     ├── distance_sensor/    # HC-SR04 proximity detection
     └── led_controller/     # NeoPixel status/mood lighting
 ```
@@ -138,6 +142,10 @@ Skills are self-contained plugins that register their own voice commands and pip
 | `timer_alarm` | "set a timer for 5 minutes", "time left" | tts |
 | `weather` | "what's the weather", "temperature outside" | network |
 | `home_assistant` | "turn on the lights", "toggle the fan" | network |
+| `presentation` | "give a presentation about AI", "present for 5 minutes" | tts |
+| `storyteller` | "tell me a story", "tell a scary story", "tell a joke" | tts |
+| `daily_briefing` | "good morning", "daily briefing", "catch me up" | tts |
+| `greeter` | "greetings on/off", "greet everyone" | camera, tts |
 | `distance_sensor` | "how far", "start proximity alert" | gpio |
 | `led_controller` | "set color red", "lights off", "brightness 50" | gpio |
 
