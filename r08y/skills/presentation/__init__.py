@@ -65,6 +65,7 @@ class Skill(BaseSkill):
         self._original_volume: str = "+0%"
         self._original_rate: str = "+0%"
         self._client = None
+        self._model = "claude-sonnet-5-5"
 
     @property
     def manifest(self) -> SkillManifest:
@@ -109,12 +110,11 @@ class Skill(BaseSkill):
     async def setup(self, context):
         await super().setup(context)
         if ANTHROPIC_AVAILABLE:
-            api_key = context.config.get("anthropic_api_key", "")
-            if not api_key:
-                # Fall back to the main AI config key
-                from r08y.config import load_config
-                config = load_config()
-                api_key = config.ai.api_key
+            from r08y.config import load_config
+
+            config = load_config()
+            api_key = context.config.get("anthropic_api_key", config.ai.api_key)
+            self._model = context.config.get("model", config.ai.model)
             if api_key and not api_key.startswith("YOUR_"):
                 self._client = anthropic.AsyncAnthropic(api_key=api_key)
 
@@ -180,7 +180,7 @@ class Skill(BaseSkill):
 
         try:
             response = await self._client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self._model,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
             )

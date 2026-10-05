@@ -49,7 +49,7 @@ class Skill(BaseSkill):
             name="sound_effects",
             version="1.0.0",
             description="Play audio cues for events and on command",
-            requires=set(),
+            requires={"speaker"},
             commands=[
                 VoiceCommand(triggers=["play a beep", "beep"], handler="cmd_beep"),
                 VoiceCommand(triggers=["happy sound", "play happy"], handler="cmd_happy"),
@@ -67,16 +67,9 @@ class Skill(BaseSkill):
             return
         wav_data = _generate_wav(sound["freq"], sound["duration"])
         for i in range(sound["repeat"]):
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "aplay", "-q", "-",
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.communicate(input=wav_data)
-            except FileNotFoundError:
-                self.ctx.logger.debug("aplay not available for sound effects")
+            played = await self.ctx.tts.play_wav_bytes(wav_data)
+            if not played:
+                self.ctx.logger.debug("Audio playback unavailable for sound effects")
                 return
             if i < sound["repeat"] - 1:
                 await asyncio.sleep(0.08)

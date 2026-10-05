@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from r08y.modules.servo_controller import MotorController
     from r08y.modules.text_to_speech import TextToSpeech
     from r08y.modules.camera import CameraCapture
+    from r08y.modules.mobility import MobilityController
+    from r08y.modules.sensors import DistanceSensor, LightSensors
     from r08y.main import DroidState
 
 
@@ -62,6 +64,9 @@ class SkillContext:
     servo: "MotorController"
     tts: "TextToSpeech"
     camera: "CameraCapture"
+    mobility: "MobilityController"
+    distance: "DistanceSensor"
+    light_sensors: "LightSensors"
     state: "DroidState"
     config: Dict[str, Any]
     data_dir: str
@@ -113,6 +118,8 @@ class BaseSkill(ABC):
         self._running = False
         for task in self._tasks:
             task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
     # --- Pipeline hook methods (override as needed) ---

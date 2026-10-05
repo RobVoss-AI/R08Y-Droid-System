@@ -2,6 +2,7 @@
 
 import struct
 
+from r08y.config import AudioConfig, WakeWordConfig
 from r08y.modules.voice_input import VoiceInput
 
 
@@ -28,6 +29,17 @@ def test_rms_moderate_signal():
     moderate = struct.pack("<512h", *([16000] * 512))
     rms = VoiceInput._compute_rms(moderate)
     assert 15000 < rms < 17000
+
+
+def test_stereo_48k_is_normalized_to_mono_16k():
+    voice = VoiceInput(AudioConfig(sample_rate=16000, channels=1, chunk_size=4), WakeWordConfig())
+    voice._input_rate = 48000
+    voice._input_channels = 2
+    # Four output samples after downmix + 3:1 resampling.
+    stereo = struct.pack("<24h", *([1000, 3000] * 12))
+    normalized = voice._normalize_audio(stereo)
+    samples = struct.unpack("<4h", normalized)
+    assert samples == (2000, 2000, 2000, 2000)
 
 
 if __name__ == "__main__":

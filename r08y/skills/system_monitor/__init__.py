@@ -30,6 +30,7 @@ class Skill(BaseSkill):
                 VoiceCommand(triggers=["what's your temperature", "how hot are you", "cpu temp"], handler="cmd_temp"),
                 VoiceCommand(triggers=["how much memory", "memory usage", "ram usage"], handler="cmd_memory"),
                 VoiceCommand(triggers=["how long have you been running", "uptime"], handler="cmd_uptime"),
+                VoiceCommand(triggers=["hardware status", "what hardware is connected", "check hardware"], handler="cmd_hardware"),
             ],
             emits_events=["system.overheat"],
         )
@@ -131,3 +132,17 @@ class Skill(BaseSkill):
 
     async def cmd_uptime(self, text: str, user_name: str) -> Optional[str]:
         return f"I've been running for {self._read_uptime()}."
+
+    async def cmd_hardware(self, text: str, user_name: str) -> Optional[str]:
+        status = self.ctx.state.hardware_status
+        if not status:
+            return "My hardware check has not run yet."
+        passed = [name for name, item in status.items() if item.get("status") == "pass"]
+        concerns = [
+            name for name, item in status.items()
+            if item.get("status") in {"fail", "warn"}
+        ]
+        response = f"Online hardware: {', '.join(passed) or 'none confirmed'}."
+        if concerns:
+            response += f" Check needed: {', '.join(concerns)}."
+        return response
