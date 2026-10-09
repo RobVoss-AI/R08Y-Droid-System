@@ -12,8 +12,8 @@ This map records how the original R08Y design was adapted to Rob’s working Fre
 | Freenove ultrasonic sensor | Working | Replace hardcoded generic HC-SR04 pins with official `Ultrasonic.get_distance()`. | Repeated plausible distance; forward movement blocks inside 30 cm. |
 | Freenove camera | Working | Modify capture to try Picamera2, then OpenCV/V4L2, with reconnect and flip settings. | One frame with expected shape; continuous tracking in runtime. |
 | Freenove pan/tilt | Working | Replace generic PCA9685 assumptions with official `Servo.set_servo_pwm("0"/"1", angle)`. | Home and face tracking without binding at configured limits. |
-| XVF3800 four-mic USB array | Capture, LEDs, direction response, and headphone output previously working | Modify audio input/output to select by name, handle native capture format, downmix/resample to 16 kHz mono, and select the PipeWire sink. | Matching source/sink, microphone RMS above zero, wake-word turn completes. |
-| Seeed 4-ohm 5-watt speaker | Ordered, not yet tested | Add speaker smoke tone through the same configured TTS playback path. | Audible tone, startup greeting, and AI response. |
+| XVF3800 four-mic USB array | Capture verified at S16_LE, 16 kHz, two channels; LEDs and direction response working | Resolve by name, open the native format, downmix to 16 kHz mono for wake word/STT, and detect the known open-but-broken USB state with a startup read. | Matching ALSA/PipeWire devices, startup capture read, microphone RMS above zero, wake-word turn completes. |
+| Seeed 4-ohm 5-watt speaker | Working through the XVF3800 after setting its `PCM 1` level to 100 | Route WAV/TTS through `pw-play` to the PipeWire sink resolved by name. | Audible tone, startup greeting, and AI response. |
 | UPS HAT and battery | Not integrated | Defer. Keep disabled and report as skipped. No model-specific code until the exact HAT is identified and tested separately. | Future power and shutdown plan after direct-power acceptance. |
 
 ## Reused without architectural change
@@ -34,8 +34,8 @@ These modules received only compatibility or lifecycle wiring where required. Th
 | Camera | USB webcam only | Picamera2 or OpenCV/V4L2, selectable device path, reconnect, flips. |
 | Pan/tilt | Generic PCA9685 or guessed GPIO fallback | Official Freenove servo API; GPIO is allowed only with explicit pins. |
 | Distance | Generic HC-SR04 with hardcoded pins in a skill | Shared sensor abstraction using the official Freenove ultrasonic API. |
-| Voice input | Fixed numeric audio index and format | Strict device-name selection; native-format fallback; downmix/resample. |
-| Speech output | Generic default player/device | XVF3800 PipeWire sink selection and compatible playback conversion. |
+| Voice input | Fixed numeric audio index and format | Strict device-name selection; XVF3800 S16_LE/16 kHz/stereo capture; downmix/resample; startup read with explicit USB-reseat diagnosis. |
+| Speech output | Generic default player/device | Name-resolved XVF3800 PipeWire sink selection with direct `pw-play --target` routing and compatible playback conversion. |
 | Main runtime | Vision and voice only | Sensor, mobility, component health, and graceful-stop orchestration. |
 | Service | Hardcoded account/path behavior | Installer-rendered user and group, protected environment file, config preflight, signal-aware shutdown. |
 | Installer | Generic Pi build with long local dlib compilation | Debian/Pi packages first, system-site packages, optional face recognition, current hardware groups. |
@@ -46,7 +46,7 @@ These modules received only compatibility or lifecycle wiring where required. Th
 - `r08y/hardware/freenove.py`: verified upstream module discovery and loading.
 - `r08y/modules/sensors.py`: distance and light abstractions with disabled and mock implementations.
 - `r08y/modules/mobility.py`: mecanum mixing, wheel calibration, clearance guard, deadman watchdog, emergency stop, and fake controller.
-- `r08y/modules/audio_devices.py`: named PortAudio and PipeWire resolution.
+- `r08y/modules/audio_devices.py`: named ALSA, PortAudio, and PipeWire resolution.
 - `r08y/modules/health.py`: component-level startup report.
 - `r08y/diagnostics.py`: passive discovery and opt-in physical exercises.
 - `r08y/skills/mobility_control`: short voice-triggered mecanum movements.
@@ -55,13 +55,15 @@ These modules received only compatibility or lifecycle wiring where required. Th
 
 ## Explicit unknowns
 
-No code in this repository asserts that the physical wheel polarity, camera device node, pan/tilt orientation, or audio hardware format is correct until the Pi reports it. Those differences are isolated in configuration:
+No code in this repository asserts that the physical wheel polarity, camera device node, or pan/tilt orientation is correct until the Pi reports it. Those differences are isolated in configuration. The XVF3800 capture format below is hardware-verified; other microphones can override it:
 
 - `mobility.wheel_scale`
 - `camera.device_path`, `horizontal_flip`, and `vertical_flip`
 - servo angle limits and homes
 - `audio.hardware_sample_rate` and `hardware_channels`
 - `tts.output_target`
+
+ALSA card numbers and PipeWire node IDs remain intentionally undisclosed in configuration. The working Pi reported ALSA card 3/device 0 during bring-up, but both identifiers can change after reboot or USB re-enumeration. R08Y resolves the configured name at each startup.
 
 The exact UPS model and interface remain unknown. R08Y does not pretend to monitor it.
 

@@ -38,6 +38,7 @@ class TextToSpeech:
         self._interrupted = False
         self._play_lock = asyncio.Lock()
         self._resolved_target: Optional[str] = config.output_target
+        self.output_detail = "playback path has not been checked"
         self.playback_available = False
         self.available = False
 
@@ -48,7 +49,7 @@ class TextToSpeech:
             return None
         if shutil.which(requested):
             return requested
-        for fallback in ("mpv", "pw-play", "ffplay", "paplay", "aplay"):
+        for fallback in ("pw-play", "mpv", "ffplay", "paplay", "aplay"):
             if shutil.which(fallback):
                 logger.warning("Playback command '%s' not found; using %s", requested, fallback)
                 self._config.playback_command = fallback
@@ -58,18 +59,22 @@ class TextToSpeech:
     async def start(self) -> None:
         player = self._select_player()
         if player is None:
+            self.output_detail = "no supported audio playback command is installed"
             logger.error("No supported audio playback command is installed")
             return
 
         if self._config.output_device_name:
             resolver = PipeWireResolver()
             if self._config.set_pipewire_default:
-                selected = await asyncio.to_thread(
-                    resolver.configure_defaults, self._config.output_device_name
+                sink = await asyncio.to_thread(
+                    resolver.resolve, "sink", self._config.output_device_name
                 )
-                sink = selected.get("sink")
                 if sink:
+                    await asyncio.to_thread(resolver.set_default, sink)
                     self._resolved_target = sink.id
+                    self.output_detail = (
+                        f"{sink.name}: PipeWire sink {sink.id} selected by name via {player}"
+                    )
                     logger.info("Audio output selected: '%s' (PipeWire node %s)", sink.name, sink.id)
                 elif resolver.available:
                     log = logger.error if self._config.require_output_device_match else logger.warning
@@ -78,8 +83,12 @@ class TextToSpeech:
                         self._config.output_device_name,
                     )
                     if self._config.require_output_device_match:
+                        self.output_detail = (
+                            f"PipeWire sink matching '{self._config.output_device_name}' was not found"
+                        )
                         return
                 elif self._config.require_output_device_match and not self._resolved_target:
+                    self.output_detail = "wpctl is required for strict named audio-output selection"
                     logger.error("wpctl is required for strict named audio-output selection")
                     return
             elif not self._resolved_target:
@@ -88,12 +97,22 @@ class TextToSpeech:
                 )
                 if sink:
                     self._resolved_target = sink.id
+                    self.output_detail = (
+                        f"{sink.name}: PipeWire sink {sink.id} selected by name via {player}"
+                    )
                 elif self._config.require_output_device_match:
+                    self.output_detail = (
+                        f"Audio output matching '{self._config.output_device_name}' was not found"
+                    )
                     logger.error(
                         "Audio output matching '%s' was not found",
                         self._config.output_device_name,
                     )
                     return
+
+        if self.output_detail == "playback path has not been checked":
+            target = self._resolved_target or "current default"
+            self.output_detail = f"{player}: output target {target}"
 
         self.playback_available = True
         self.available = EDGE_TTS_AVAILABLE

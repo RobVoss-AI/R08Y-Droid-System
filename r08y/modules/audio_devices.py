@@ -19,6 +19,25 @@ class AudioDevice:
     kind: str
 
 
+@dataclass(frozen=True)
+class AlsaCaptureDevice:
+    """An ALSA capture endpoint discovered from ``arecord -l``."""
+
+    card: int
+    device: int
+    card_id: str
+    card_name: str
+    device_name: str
+
+    @property
+    def hardware_id(self) -> str:
+        return f"hw:{self.card},{self.device}"
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.card_name} {self.device_name}".strip()
+
+
 def name_matches(candidate: str, requested: str) -> bool:
     return requested.casefold() in candidate.casefold()
 
@@ -28,6 +47,7 @@ def find_portaudio_input(
     requested_name: str = "",
     requested_index: Optional[int] = None,
     require_match: bool = False,
+    requested_aliases: Iterable[str] = (),
 ):
     """Return ``(index, info)`` for the requested input device."""
     if requested_index is not None:
@@ -36,15 +56,19 @@ def find_portaudio_input(
             raise ValueError(f"Audio device {requested_index} has no input channels")
         return requested_index, info
 
+    requested_names = [name for name in (requested_name, *requested_aliases) if name]
     inputs = []
     for index in range(pa.get_device_count()):
         info = pa.get_device_info_by_index(index)
         if int(info.get("maxInputChannels", 0)) > 0:
             inputs.append((index, info))
-            if requested_name and name_matches(str(info.get("name", "")), requested_name):
+            if any(
+                name_matches(str(info.get("name", "")), name)
+                for name in requested_names
+            ):
                 return int(info.get("index", index)), info
 
-    if requested_name and require_match:
+    if requested_names and require_match:
         names = ", ".join(str(info.get("name", index)) for index, info in inputs) or "none"
         raise LookupError(f"Input device matching '{requested_name}' not found; available: {names}")
 
@@ -53,6 +77,76 @@ def find_portaudio_input(
         default_index = int(default["index"])
         return default_index, default
     raise LookupError("No audio input devices are available")
+
+
+def parse_arecord_list(output: str) -> List[AlsaCaptureDevice]:
+    """Parse ALSA capture hardware without assuming a stable card number."""
+    devices: List[AlsaCaptureDevice] = []
+    pattern = re.compile(
+        r"^card\s+(\d+):\s+([^\s]+)\s+\[(.*?)\],\s+"
+        r"device\s+(\d+):\s+.*?\[(.*?)\]\s*$",
+        re.IGNORECASE,
+    )
+    for raw_line in output.splitlines():
+        match = pattern.match(raw_line.strip())
+        if not match:
+            continue
+        devices.append(
+            AlsaCaptureDevice(
+                card=int(match.group(1)),
+                device=int(match.group(4)),
+                card_id=match.group(2).strip(),
+                card_name=match.group(3).strip(),
+                device_name=match.group(5).strip(),
+            )
+        )
+    return devices
+
+
+def find_alsa_capture(
+    devices: Iterable[AlsaCaptureDevice], requested_name: str
+) -> Optional[AlsaCaptureDevice]:
+    """Find an ALSA endpoint by its stable card or product name."""
+    for device in devices:
+        searchable = " ".join(
+            (device.card_id, device.card_name, device.device_name)
+        )
+        if name_matches(searchable, requested_name):
+            return device
+    return None
+
+
+class AlsaResolver:
+    """Resolve capture hardware by name while treating card numbers as volatile."""
+
+    def __init__(self, runner=subprocess.run):
+        self._runner = runner
+
+    @property
+    def available(self) -> bool:
+        return shutil.which("arecord") is not None
+
+    def list_capture_devices(self) -> List[AlsaCaptureDevice]:
+        if not self.available:
+            return []
+        try:
+            result = self._runner(
+                ["arecord", "-l"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.warning("arecord -l failed: %s", result.stderr.strip())
+                return []
+            return parse_arecord_list(result.stdout)
+        except (OSError, subprocess.TimeoutExpired):
+            logger.exception("Unable to query ALSA capture devices")
+            return []
+
+    def resolve(self, requested_name: str) -> Optional[AlsaCaptureDevice]:
+        return find_alsa_capture(self.list_capture_devices(), requested_name)
 
 
 def parse_wpctl_status(output: str) -> List[AudioDevice]:

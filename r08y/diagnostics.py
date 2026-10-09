@@ -11,7 +11,13 @@ from typing import List
 
 from r08y.config import R08YConfig, validate_config
 from r08y.hardware.freenove import FreenoveLibrary, discover_freenove_path
-from r08y.modules.audio_devices import PipeWireResolver, format_device_names
+from r08y.modules.audio_devices import (
+    AlsaResolver,
+    PipeWireResolver,
+    find_alsa_capture,
+    format_device_names,
+    name_matches,
+)
 
 
 @dataclass(frozen=True)
@@ -71,23 +77,74 @@ def _passive_checks(config: R08YConfig) -> List[SmokeResult]:
     else:
         results.append(SmokeResult("i2c", "skip", "i2cdetect is not installed"))
 
-    resolver = PipeWireResolver()
-    devices = resolver.list_devices()
-    audio_matches = [
-        device for device in devices
-        if config.audio.device_name.casefold() in device.name.casefold()
-    ]
-    kinds = {device.kind for device in audio_matches}
-    if resolver.available:
+    alsa = AlsaResolver()
+    if alsa.available:
+        alsa_devices = alsa.list_capture_devices()
+        alsa_capture = find_alsa_capture(alsa_devices, config.audio.device_name)
+        used_fallback = False
+        if alsa_capture is None and not config.audio.require_device_match and alsa_devices:
+            alsa_capture = alsa_devices[0]
+            used_fallback = True
         results.append(
             _result(
-                "xvf3800_pipewire",
-                {"sink", "source"}.issubset(kinds),
-                format_device_names(audio_matches) or "no matching sink/source",
+                "audio_alsa_capture",
+                alsa_capture is not None,
+                (
+                    f"{alsa_capture.display_name} ({alsa_capture.hardware_id}; "
+                    f"{'default fallback' if used_fallback else 'discovered by name'})"
+                    if alsa_capture
+                    else (
+                        f"no capture device matching '{config.audio.device_name}'; "
+                        "available: "
+                        + (", ".join(device.display_name for device in alsa_devices) or "none")
+                    )
+                ),
             )
         )
     else:
-        results.append(SmokeResult("xvf3800_pipewire", "skip", "wpctl is not installed"))
+        results.append(SmokeResult("audio_alsa_capture", "skip", "arecord is not installed"))
+
+    resolver = PipeWireResolver()
+    devices = resolver.list_devices()
+    if resolver.available:
+        sources = [device for device in devices if device.kind == "source"]
+        sinks = [device for device in devices if device.kind == "sink"]
+        source = next(
+            (
+                device for device in sources
+                if name_matches(device.name, config.audio.device_name)
+            ),
+            None,
+        )
+        sink = next(
+            (
+                device for device in sinks
+                if name_matches(device.name, config.tts.output_device_name)
+            ),
+            None,
+        )
+        if source is None and not config.audio.require_device_match and sources:
+            source = sources[0]
+        if sink is None and not config.tts.require_output_device_match and sinks:
+            sink = sinks[0]
+        selected_audio = [device for device in (sink, source) if device is not None]
+        missing = []
+        if source is None:
+            missing.append(f"source '{config.audio.device_name}'")
+        if sink is None:
+            missing.append(f"sink '{config.tts.output_device_name}'")
+        detail = format_device_names(selected_audio) or "no usable sink/source"
+        if missing:
+            detail = f"{detail}; missing " + ", ".join(missing)
+        results.append(
+            _result(
+                "audio_pipewire",
+                source is not None and sink is not None,
+                detail,
+            )
+        )
+    else:
+        results.append(SmokeResult("audio_pipewire", "skip", "wpctl is not installed"))
 
     if shutil.which("vcgencmd"):
         throttle = _run_command(["vcgencmd", "get_throttled"], timeout=3)
@@ -158,11 +215,16 @@ async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> Lis
             )
         )
         level = await voice.measure_level()
+        level_ok = level is not None and level > 0
         results.append(
             _result(
                 "microphone_capture",
-                level is not None,
-                f"device={voice.device_name}, average RMS={level:.1f}" if level is not None else "capture failed",
+                level_ok,
+                (
+                    f"{voice.capture_detail}; average RMS={level:.1f}"
+                    if level is not None
+                    else voice.capture_detail
+                ),
             )
         )
         played = await tts.play_wav_bytes(_generate_wav(660, 0.2))

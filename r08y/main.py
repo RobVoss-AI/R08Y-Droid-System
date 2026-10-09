@@ -389,6 +389,11 @@ async def run(config_path: str = "config.yaml") -> None:
         )
         state.hardware_status = health.as_dict()
         logger.info("Hardware health: %s", health.summary())
+        for component_name, component in health.components.items():
+            if component.status == "fail":
+                logger.error("Hardware check failed: %s: %s", component_name, component.detail)
+            elif component.status == "warn":
+                logger.warning("Hardware check warning: %s: %s", component_name, component.detail)
 
         import yaml
         from pathlib import Path
@@ -432,7 +437,13 @@ async def run(config_path: str = "config.yaml") -> None:
         )
 
         if tts.available:
-            await tts.speak("R08Y online. Ready when you are.")
+            if voice_input.requires_usb_reseat:
+                await tts.speak(
+                    "R08Y is online, but microphone capture failed. "
+                    "Unplug and reconnect my microphone USB cable."
+                )
+            else:
+                await tts.speak("R08Y online. Ready when you are.")
 
         vision_task = asyncio.create_task(
             vision_pipeline(

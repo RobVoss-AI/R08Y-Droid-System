@@ -24,7 +24,7 @@ sudo apt-get install -y \
     python3-pip python3-venv python3-dev \
     python3-opencv python3-pyaudio python3-smbus python3-gpiozero \
     libopenblas-dev portaudio19-dev \
-    ffmpeg mpv alsa-utils i2c-tools wireplumber git
+    ffmpeg mpv alsa-utils i2c-tools pipewire-bin wireplumber git
 
 for optional_package in python3-picamera2 python3-dlib; do
     if apt-cache show "${optional_package}" >/dev/null 2>&1; then

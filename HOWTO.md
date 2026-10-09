@@ -26,6 +26,7 @@ On the Pi:
 
 ```bash
 vcgencmd get_throttled
+arecord -l
 wpctl status -n
 sudo i2cdetect -y 1
 ```
@@ -33,10 +34,23 @@ sudo i2cdetect -y 1
 Expected:
 
 - `throttled=0x0`
+- an ALSA capture device whose name contains `XVF3800` (its card number may change)
 - an XVF3800 source and sink
 - I2C addresses `40` for the PWM controller and `48` for the ADC
 
 Stop if the Pi reports current undervoltage or throttling. Historical throttling bits should also be resolved before motor testing.
+
+Open the mixer and confirm the already verified speaker level:
+
+```bash
+alsamixer
+```
+
+Press `F6`, select the XVF3800 by name, and keep `PCM 1` at `100`. Press `Esc`, then save the working mixer state:
+
+```bash
+sudo alsactl store
+```
 
 ## 3. Verify the official Freenove source
 
@@ -73,6 +87,7 @@ For a first clone:
 cd ~
 git clone https://github.com/RobVoss-AI/R08Y-Droid-System.git
 cd R08Y-Droid-System
+git switch codex/freenove-xvf3800-integration
 bash install.sh
 ```
 
@@ -80,9 +95,14 @@ For an existing clone:
 
 ```bash
 cd ~/R08Y-Droid-System
+sudo systemctl stop r08y 2>/dev/null || true
+git fetch origin
+git switch codex/freenove-xvf3800-integration
 git pull --ff-only
 bash install.sh
 ```
+
+The branch command selects the current audio-integration pull request. After that pull request is merged, switch back to `main` and use the same pull/install sequence.
 
 The installer creates `/opt/r08y`, `/etc/r08y/r08y.env`, and the `r08y.service` unit. It preserves an existing `/opt/r08y/config.yaml`.
 
@@ -113,11 +133,18 @@ Keep these safety defaults for first run:
 
 ```yaml
 audio:
+  sample_rate: 16000
+  channels: 1
+  device_index: null
   device_name: XVF3800
   require_device_match: true
+  hardware_sample_rate: 16000
+  hardware_channels: 2
 
 tts:
+  playback_command: pw-play
   output_device_name: XVF3800
+  set_pipewire_default: true
   require_output_device_match: true
 
 mobility:
@@ -154,6 +181,7 @@ Expected passes:
 - official Freenove library
 - Freenove parameter file and PCB version
 - PCA9685 at `0x40` and ADS7830 at `0x48`
+- XVF3800 ALSA capture hardware discovered by name
 - XVF3800 PipeWire source and sink
 - Pi power status `throttled=0x0`
 
@@ -178,6 +206,24 @@ Confirm all of the following:
 - the short 660 Hz tone is clearly audible from the new speaker
 
 If the tone command passes but nothing is audible, inspect `wpctl status -n` and XVF3800 playback volume. Do not reflash firmware during this first pass; headphone playback already proved the USB output path.
+
+R08Y opens the XVF3800 at its verified native `S16_LE`, two-channel, 16 kHz capture format, then downmixes to 16 kHz mono for the wake word and STT. The startup self-test reads a real chunk before declaring the microphone ready.
+
+If `microphone_capture` reports the known immediate ALSA I/O error, stop retrying and reseat USB:
+
+```bash
+sudo systemctl stop r08y 2>/dev/null || true
+```
+
+Physically unplug the XVF3800 USB cable, wait 10 seconds, reconnect it, and wait another 10 seconds. Then confirm the device has returned and rerun Gate C:
+
+```bash
+arecord -l
+wpctl status -n
+cd /opt/r08y
+./venv/bin/python -m r08y --config config.yaml \
+  --smoke-test --exercise-hardware
+```
 
 ### Gate D: guarded motor exercise
 
@@ -219,6 +265,14 @@ Expected first-run behavior:
 7. “Move forward” runs briefly only when valid clearance is available.
 8. “Stop wheels” sends an immediate zero-duty command.
 
+For the shortest live audio acceptance test, keep a second terminal on the log:
+
+```bash
+journalctl -u r08y -f
+```
+
+Listen for “R08Y online. Ready when you are.” Then say the configured wake word, pause briefly, and say, “Tell me your name in one sentence.” The log should show wake detection, a non-empty transcription, and an AI response. The response should play through the XVF3800 speaker.
+
 Useful service controls:
 
 ```bash
@@ -240,8 +294,9 @@ Do not install the UPS HAT during the speaker and full-system acceptance pass. O
 ## Troubleshooting boundaries
 
 - Missing `params.json`: run the official Freenove parameter tool and enter verified board versions.
-- No XVF3800 match: use `wpctl status -n`; keep strict matching on and correct the configured name.
-- No microphone samples: confirm the XVF3800 input in `wpctl`, then rerun Gate C.
+- No XVF3800 match: use `arecord -l` and `wpctl status -n`; keep strict matching on and correct the configured name.
+- Immediate XVF3800 capture I/O error: stop R08Y, physically unplug/replug XVF3800 USB with the 10-second waits above, then rerun Gate C. Reboots alone may not clear this state.
+- No microphone samples without an I/O error: confirm the XVF3800 by name in both `arecord -l` and `wpctl status -n`, then rerun Gate C.
 - No sound: verify the speaker is on the documented JST connector and confirm the XVF3800 sink and volume.
 - No camera frame: list `/dev/video*`, then set `camera.device_path` only after identifying the correct node.
 - Forward blocked: fix the ultrasonic reading. Do not disable the guard for normal operation.

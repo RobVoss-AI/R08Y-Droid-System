@@ -79,8 +79,8 @@ class AudioConfig:
     device_index: Optional[int] = None
     device_name: str = "XVF3800"
     require_device_match: bool = True
-    hardware_sample_rate: Optional[int] = None
-    hardware_channels: Optional[int] = None
+    hardware_sample_rate: Optional[int] = 16000
+    hardware_channels: Optional[int] = 2
     rms_threshold: int = 500
     silence_duration: float = 1.5
     max_record_seconds: int = 30
@@ -122,7 +122,7 @@ class TTSConfig:
     voice: str = "en-US-GuyNeural"
     rate: str = "+0%"
     volume: str = "+0%"
-    playback_command: str = "mpv"
+    playback_command: str = "pw-play"
     output_device_name: str = "XVF3800"
     output_target: Optional[str] = None
     set_pipewire_default: bool = True
@@ -277,6 +277,13 @@ def validate_config(config: R08YConfig) -> List[str]:
     errors: List[str] = []
     if config.audio.sample_rate <= 0 or config.audio.channels <= 0:
         errors.append("audio sample_rate and channels must be positive")
+    if (
+        config.audio.hardware_sample_rate is not None
+        and config.audio.hardware_sample_rate <= 0
+    ):
+        errors.append("audio hardware_sample_rate must be positive or null")
+    if config.audio.hardware_channels is not None and config.audio.hardware_channels <= 0:
+        errors.append("audio hardware_channels must be positive or null")
     if config.servos.driver == "gpio" and (
         config.servos.gpio_pan_pin is None or config.servos.gpio_tilt_pin is None
     ):

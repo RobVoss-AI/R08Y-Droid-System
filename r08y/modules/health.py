@@ -103,11 +103,19 @@ async def collect_runtime_health(
     )
     report.components["microphone"] = ComponentHealth(
         "pass" if voice_input.available else "fail",
-        voice_input.device_name or "not available",
+        getattr(
+            voice_input,
+            "capture_detail",
+            voice_input.device_name or "not available",
+        ),
     )
     report.components["speaker_path"] = ComponentHealth(
         "pass" if tts.playback_available else "fail",
-        config.tts.output_device_name or "system default",
+        getattr(
+            tts,
+            "output_detail",
+            config.tts.output_device_name or "system default",
+        ),
     )
 
     distance_value: Optional[float] = None

@@ -63,8 +63,8 @@ audio:
   device_index: null       # Avoid volatile numeric indexes when possible
   device_name: XVF3800
   require_device_match: true
-  hardware_sample_rate: null  # Falls back to the XVF3800 native rate if needed
-  hardware_channels: null
+  hardware_sample_rate: 16000  # XVF3800 native capture format: S16_LE/16 kHz/stereo
+  hardware_channels: 2        # Downmixed to processing channels before wake word/STT
   rms_threshold: 500
   silence_duration: 1.5
   max_record_seconds: 30
@@ -98,7 +98,7 @@ tts:
   voice: en-US-GuyNeural
   rate: "+0%"
   volume: "+0%"
-  playback_command: mpv
+  playback_command: pw-play   # Targets the XVF3800 PipeWire sink by discovered ID
   output_device_name: XVF3800
   output_target: null
   set_pipewire_default: true

@@ -21,15 +21,23 @@ def test_runtime_health_reports_exact_capabilities(monkeypatch, tmp_path):
             R08YConfig(),
             camera=SimpleNamespace(available=True, backend="opencv"),
             servo=SimpleNamespace(available=True),
-            voice_input=SimpleNamespace(available=True, device_name="XVF3800"),
-            tts=SimpleNamespace(playback_available=True),
+            voice_input=SimpleNamespace(
+                available=True,
+                device_name="XVF3800",
+                capture_detail="XVF3800 native capture passed",
+            ),
+            tts=SimpleNamespace(
+                playback_available=True,
+                output_detail="XVF3800 PipeWire sink selected",
+            ),
             distance=distance,
             light_sensors=lights,
             mobility=SimpleNamespace(available=True),
         )
         assert report.ready
+        assert report.components["microphone"].detail == "XVF3800 native capture passed"
         assert report.components["ultrasonic"].detail == "88.0 cm"
-        assert report.components["speaker_path"].status == "pass"
+        assert report.components["speaker_path"].detail == "XVF3800 PipeWire sink selected"
         assert report.components["ups"].status == "skip"
         assert "mobility=pass" in report.summary()
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import logging
 import math
@@ -14,9 +15,15 @@ from enum import Enum, auto
 from typing import Optional
 
 from r08y.config import AudioConfig, WakeWordConfig
-from r08y.modules.audio_devices import find_portaudio_input
+from r08y.modules.audio_devices import AlsaResolver, find_portaudio_input
 
 logger = logging.getLogger(__name__)
+
+XVF3800_USB_RESEAT = (
+    "XVF3800 capture failed after the device was discovered. This matches the known "
+    "USB startup condition. Physically unplug the XVF3800 USB cable, wait 10 seconds, "
+    "reconnect it, wait 10 seconds, then restart R08Y."
+)
 
 try:
     import pyaudio
@@ -56,18 +63,69 @@ class VoiceInput:
         self._input_channels = audio_config.channels
         self._input_frames_per_buffer = audio_config.chunk_size
         self.device_name: Optional[str] = None
+        self.alsa_hardware_id: Optional[str] = None
+        self.capture_status = "not-tested"
+        self.capture_detail = "startup capture self-test has not run"
+        self.requires_usb_reseat = False
         self.available = False
+
+    def _is_xvf3800(self) -> bool:
+        selected_name = self.device_name or self._audio_config.device_name
+        return "xvf3800" in selected_name.casefold()
+
+    def _set_capture_failure(self, exc: BaseException, *, during_startup: bool) -> None:
+        self.available = False
+        self.capture_status = "fail"
+        is_io_error = (
+            isinstance(exc, OSError) and exc.errno in {errno.EIO, -errno.EIO}
+        ) or "input/output error" in str(exc).casefold()
+        self.requires_usb_reseat = self._is_xvf3800() and (
+            is_io_error or (during_startup and self._stream is not None)
+        )
+        if self.requires_usb_reseat:
+            self.capture_detail = f"{XVF3800_USB_RESEAT} ALSA detail: {exc}"
+            logger.error(self.capture_detail)
+        else:
+            self.capture_detail = f"Audio capture failed: {type(exc).__name__}: {exc}"
+            logger.error(self.capture_detail)
+
+    def _close_audio(self) -> None:
+        if self._stream:
+            try:
+                if self._stream.is_active():
+                    self._stream.stop_stream()
+                self._stream.close()
+            except Exception:
+                logger.debug("Audio stream cleanup failed", exc_info=True)
+            finally:
+                self._stream = None
+        if self._pa:
+            try:
+                self._pa.terminate()
+            except Exception:
+                logger.debug("PortAudio termination failed", exc_info=True)
+            finally:
+                self._pa = None
 
     def _init_audio(self) -> bool:
         if not PYAUDIO_AVAILABLE:
+            self.capture_status = "unavailable"
+            self.capture_detail = "PyAudio is not installed"
             return False
         try:
             self._pa = pyaudio.PyAudio()
+            aliases = []
+            if self._audio_config.device_index is None and self._audio_config.device_name:
+                alsa_device = AlsaResolver().resolve(self._audio_config.device_name)
+                if alsa_device:
+                    self.alsa_hardware_id = alsa_device.hardware_id
+                    aliases.append(alsa_device.hardware_id)
             device_index, info = find_portaudio_input(
                 self._pa,
                 requested_name=self._audio_config.device_name,
                 requested_index=self._audio_config.device_index,
                 require_match=self._audio_config.require_device_match,
+                requested_aliases=aliases,
             )
             self.device_name = str(info.get("name", device_index))
 
@@ -107,18 +165,54 @@ class VoiceInput:
                 raise RuntimeError(f"Unable to open selected microphone: {last_error}")
 
             logger.info(
-                "Microphone opened: '%s' (index=%s, hardware=%dHz/%dch, processing=%dHz/%dch)",
+                "Microphone opened: '%s' (discovered index=%s, ALSA=%s, "
+                "hardware=S16_LE/%dHz/%dch, "
+                "processing=S16_LE/%dHz/%dch)",
                 self.device_name,
                 device_index,
+                self.alsa_hardware_id or "name-only",
                 self._input_rate,
                 self._input_channels,
                 self._audio_config.sample_rate,
                 self._audio_config.channels,
             )
             return True
-        except Exception:
-            logger.exception("Failed to open requested microphone")
+        except Exception as exc:
+            self._set_capture_failure(exc, during_startup=True)
+            self._close_audio()
             return False
+
+    def _read_hardware_chunk(self) -> bytes:
+        if not self._stream:
+            raise RuntimeError("audio stream is not open")
+        if not self._stream.is_active():
+            raise RuntimeError("audio stream is not active")
+        raw = self._stream.read(self._input_frames_per_buffer, exception_on_overflow=False)
+        if not raw:
+            raise OSError(errno.EIO, "capture returned no audio data")
+        return self._normalize_audio(raw)
+
+    def _startup_capture_self_test(self) -> bool:
+        """Read one native-format chunk so an open-but-broken USB device is rejected."""
+        try:
+            chunk = self._read_hardware_chunk()
+            if not chunk:
+                raise OSError(errno.EIO, "capture returned an empty normalized chunk")
+        except Exception as exc:
+            self._set_capture_failure(exc, during_startup=True)
+            self._close_audio()
+            return False
+
+        self.capture_status = "pass"
+        self.capture_detail = (
+            f"{self.device_name} ({self.alsa_hardware_id or 'name match'}): "
+            f"S16_LE {self._input_rate} Hz/{self._input_channels} ch "
+            f"capture passed; processing at {self._audio_config.sample_rate} Hz/"
+            f"{self._audio_config.channels} ch"
+        )
+        self.requires_usb_reseat = False
+        logger.info("Startup audio self-test passed: %s", self.capture_detail)
+        return True
 
     def _init_porcupine(self) -> bool:
         if not PORCUPINE_AVAILABLE:
@@ -152,6 +246,11 @@ class VoiceInput:
         loop = asyncio.get_running_loop()
         audio_ok = await loop.run_in_executor(self._executor, self._init_audio)
         if not audio_ok:
+            return
+        capture_ok = await loop.run_in_executor(
+            self._executor, self._startup_capture_self_test
+        )
+        if not capture_ok:
             return
         if self._wake_config.engine == "porcupine":
             await loop.run_in_executor(self._executor, self._init_porcupine)
@@ -197,11 +296,10 @@ class VoiceInput:
 
     def _read_chunk(self) -> Optional[bytes]:
         try:
-            if self._stream and self._stream.is_active():
-                raw = self._stream.read(self._input_frames_per_buffer, exception_on_overflow=False)
-                return self._normalize_audio(raw)
-        except Exception:
-            logger.exception("Error reading audio chunk")
+            return self._read_hardware_chunk()
+        except Exception as exc:
+            self._set_capture_failure(exc, during_startup=False)
+            self._running = False
         return None
 
     @staticmethod
@@ -249,6 +347,8 @@ class VoiceInput:
             chunk = await loop.run_in_executor(self._executor, self._read_chunk)
             if chunk:
                 levels.append(self._compute_rms(chunk))
+        if not self.available or self.capture_status == "fail":
+            return None
         return sum(levels) / len(levels) if levels else None
 
     async def record_speech(self) -> Optional[bytes]:
@@ -298,17 +398,7 @@ class VoiceInput:
 
     async def stop(self) -> None:
         self._running = False
-        if self._stream:
-            try:
-                self._stream.stop_stream()
-                self._stream.close()
-            except Exception:
-                logger.debug("Audio stream was already closed", exc_info=True)
-        if self._pa:
-            try:
-                self._pa.terminate()
-            except Exception:
-                logger.debug("PortAudio termination failed", exc_info=True)
+        self._close_audio()
         if self._porcupine:
             self._porcupine.delete()
         self._executor.shutdown(wait=False)
