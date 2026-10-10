@@ -4,7 +4,7 @@ R08Y turns a Raspberry Pi 4B and Freenove 4WD mecanum chassis into a voice-contr
 
 ## Status
 
-In development. XVF3800 capture and speaker playback have been verified on the Pi. The software and mock-hardware suite are verified on macOS and Linux-compatible Python. Live acceptance still remains for the integrated R08Y voice turn, motor direction, and camera selection.
+In development. XVF3800 capture and speaker playback have been verified on the Pi. The expression kernel and mock-hardware suite are desktop-verified. Live acceptance still remains for pan/tilt expression, the integrated R08Y voice turn, motor direction, and camera selection.
 
 ## Stack
 
@@ -48,6 +48,8 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 - Numeric audio indexes are unstable across reboots. Input and output default to a strict name match for `XVF3800`; R08Y will not silently speak through another sink.
 - The XVF3800 uses a name-resolved `arecord` stream at its verified native S16_LE, 16 kHz, two-channel format. Reads have a hard timeout, and R08Y downmixes to 16 kHz mono for wake word and STT processing. Other microphones retain the PyAudio fallback.
 - Startup reads an actual capture chunk. If the XVF3800 returns an immediate I/O error or no samples before the deadline, R08Y closes capture and reports the known physical USB unplug/replug recovery.
+- One expression controller owns every runtime pan/tilt write. Face tracking and skills submit bounded gaze targets or named gestures to its queue.
+- Conversational states add restrained idle, listening, thinking, and speaking motion. `--expression-test` exercises only pan/tilt and never initializes wheel movement.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
 - `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
 - Negative `mobility.wheel_scale` values reverse individual wheels. Confirm direction only with all four wheels clear of the surface.
@@ -63,7 +65,9 @@ Freenove sensors -> skill commands ------> Claude -> Edge TTS -> XVF3800 output
        |                 |
        |                 +-> guarded mecanum mobility
        v
-camera -> face detection/recognition -> PID pan/tilt tracking
+camera -> face detection/recognition -> PID gaze target --+
+skills -> named gestures -------------------------------+-> expression queue -> pan/tilt
+voice -> listening/thinking/speaking state -------------+
 ```
 
 The hardware boundary is explicit:
@@ -71,6 +75,7 @@ The hardware boundary is explicit:
 ```text
 r08y/hardware/freenove.py        verifies and loads official kit modules
 r08y/modules/servo_controller.py Freenove pan/tilt or explicit GPIO adapter
+r08y/modules/expression_controller.py single motion owner, queue, smoothing, and body language
 r08y/modules/sensors.py          ultrasonic and light-sensor adapters
 r08y/modules/mobility.py         mecanum mixing, clearance guard, watchdog
 r08y/modules/audio_devices.py    named ALSA capture, PortAudio fallback, and PipeWire routing
@@ -85,8 +90,9 @@ See [docs/HARDWARE_MAP.md](docs/HARDWARE_MAP.md) for the full reuse, modify, and
 R08Y runs two main pipelines:
 
 ```text
-Vision: camera -> detection -> tracking -> recognition -> vision skill hooks
+Vision: camera -> detection -> gaze target -> recognition -> vision skill hooks
 Voice:  wake word -> capture -> STT -> command skill or Claude -> TTS
+Motion: gaze + named gesture + interaction state -> one bounded pan/tilt writer
 ```
 
 Skills discover themselves from `r08y/skills/*/__init__.py`. Hardware-dependent skills load only when their required adapter reports available. A failed skill setup or startup is removed from command routing instead of remaining partly active.
@@ -140,6 +146,9 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 ./venv/bin/python -m r08y --config config.yaml --speech-test \
   --speech-voice en-US-AndrewMultilingualNeural \
   --speech-rate=+1% --speech-pitch=+2Hz
+
+# Guided personality gestures; pan/tilt only, wheels never initialize
+./venv/bin/python -m r08y --config config.yaml --expression-test
 
 # Camera, pan/tilt home, sensors, microphone, and speaker tone
 ./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware

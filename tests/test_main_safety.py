@@ -26,6 +26,7 @@ class FakeMobility(FakeComponent):
 def test_shutdown_stops_all_components_even_when_one_fails():
     async def run():
         mobility = FakeMobility()
+        expression = FakeComponent()
         components = [FakeComponent(fail=True), *[FakeComponent() for _ in range(7)]]
         await _stop_runtime(
             skill_manager=None,
@@ -38,9 +39,11 @@ def test_shutdown_stops_all_components_even_when_one_fails():
             voice_input=components[5],
             brain=components[6],
             tts=components[7],
+            expression=expression,
         )
         assert mobility.emergency_stopped
         assert mobility.stopped
+        assert expression.stopped
         assert all(component.stopped for component in components)
 
     asyncio.run(run())

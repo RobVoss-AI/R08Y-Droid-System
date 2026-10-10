@@ -12,7 +12,7 @@ from typing import Optional
 
 from r08y.config import ServoConfig, TrackerConfig
 from r08y.modules.face_detector import FaceDetection
-from r08y.modules.servo_controller import MotorController
+from r08y.modules.expression_controller import ExpressionController
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +58,13 @@ class FaceTracker:
 
     def __init__(
         self,
-        servo: MotorController,
+        expression: ExpressionController,
         servo_config: ServoConfig,
         tracker_config: TrackerConfig,
         frame_width: int = 640,
         frame_height: int = 480,
     ):
-        self._servo = servo
+        self._expression = expression
         self._servo_config = servo_config
         self._tracker_config = tracker_config
         self._frame_width = frame_width
@@ -128,21 +128,19 @@ class FaceTracker:
         tilt_delta = self._tilt_pid.compute(error_y)
 
         # Apply deltas to current positions
-        current_pan = await self._servo.get_angle(self._servo_config.pan_channel)
-        current_tilt = await self._servo.get_angle(self._servo_config.tilt_channel)
+        current_pan, current_tilt = await self._expression.get_gaze_target()
 
         new_pan = current_pan + pan_delta
         new_tilt = current_tilt + tilt_delta
 
-        await self._servo.set_angle(self._servo_config.pan_channel, new_pan)
-        await self._servo.set_angle(self._servo_config.tilt_channel, new_tilt)
+        await self._expression.set_gaze_target(new_pan, new_tilt)
 
     async def _patrol(self, now: float) -> None:
         """Slowly sweep the camera left-right when no face is detected."""
         dt = now - self._prev_update_time if self._prev_update_time else 0.033
         speed = self._tracker_config.patrol_speed
 
-        current_pan = await self._servo.get_angle(self._servo_config.pan_channel)
+        current_pan, current_tilt = await self._expression.get_gaze_target()
         new_pan = current_pan + self._patrol_direction * speed * dt
 
         # Reverse direction at limits
@@ -153,17 +151,15 @@ class FaceTracker:
             new_pan = self._servo_config.pan_min
             self._patrol_direction = 1.0
 
-        await self._servo.set_angle(self._servo_config.pan_channel, new_pan)
-
         # Slowly return tilt to home during patrol
-        current_tilt = await self._servo.get_angle(self._servo_config.tilt_channel)
         home_tilt = self._servo_config.home_tilt
         if abs(current_tilt - home_tilt) > 1.0:
             tilt_step = 10.0 * dt * (1.0 if home_tilt > current_tilt else -1.0)
-            await self._servo.set_angle(self._servo_config.tilt_channel, current_tilt + tilt_step)
+            current_tilt += tilt_step
+        await self._expression.set_gaze_target(new_pan, current_tilt)
 
     async def go_home(self) -> None:
         """Return servos to home position."""
         self._pan_pid.reset()
         self._tilt_pid.reset()
-        await self._servo.home()
+        await self._expression.home()

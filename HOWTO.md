@@ -87,7 +87,7 @@ For a first clone:
 cd ~
 git clone https://github.com/RobVoss-AI/R08Y-Droid-System.git
 cd R08Y-Droid-System
-git switch codex/freenove-xvf3800-integration
+git switch codex/r08y-expression-kernel
 bash install.sh
 ```
 
@@ -97,12 +97,12 @@ For an existing clone:
 cd ~/R08Y-Droid-System
 sudo systemctl stop r08y 2>/dev/null || true
 git fetch origin
-git switch codex/freenove-xvf3800-integration
+git switch codex/r08y-expression-kernel
 git pull --ff-only
 bash install.sh
 ```
 
-The branch command selects the current audio-integration pull request. After that pull request is merged, switch back to `main` and use the same pull/install sequence.
+The branch command selects the expression work stacked on the audio-integration pull request. After both pull requests are merged, switch back to `main` and use the same pull/install sequence.
 
 The installer creates `/opt/r08y`, `/etc/r08y/r08y.env`, and the `r08y.service` unit. It preserves an existing `/opt/r08y/config.yaml`.
 
@@ -163,7 +163,7 @@ power:
   ups_enabled: false
 ```
 
-## 6. Validate in five gates
+## 6. Validate in six gates
 
 ### Gate A: configuration only
 
@@ -229,7 +229,19 @@ cd /opt/r08y
 ./venv/bin/python -m r08y --config config.yaml --audio-test
 ```
 
-### Gate D: camera, pan/tilt, sensors, microphone, and speaker
+### Gate D: guided expression test
+
+Stop the service and clear hands and cables from the camera pan/tilt assembly:
+
+```bash
+sudo systemctl stop r08y 2>/dev/null || true
+cd /opt/r08y
+./venv/bin/python -m r08y --config config.yaml --expression-test
+```
+
+This command does not initialize mobility. R08Y performs seven bounded gestures, reports each one before it begins, and returns pan/tilt home. Confirm that movement is smooth, remains inside the physical clearance, and does not bind. Press Ctrl-C to cancel if anything catches or strains.
+
+### Gate E: camera, pan/tilt, sensors, microphone, and speaker
 
 Keep the wheels raised:
 
@@ -249,7 +261,7 @@ Confirm all of the following:
 
 The command says not to speak during startup, prints `READY` before its two-second microphone sample, and tells you when the sample is complete. Pressing Ctrl-C exits the diagnostic process immediately if a native camera operation is stuck.
 
-### Gate E: guarded motor exercise
+### Gate F: guarded motor exercise
 
 Verify again that every wheel is clear. Then run:
 
@@ -283,11 +295,12 @@ Expected first-run behavior:
 1. Each available component reports ready in the health summary.
 2. R08Y says, “R08Y online. Ready when you are.”
 3. The wake word starts a voice turn.
-4. The camera tracks a face.
-5. “How far?” reports ultrasonic distance.
-6. “Check light sensors” reports both sensor voltages.
-7. “Move forward” runs briefly only when valid clearance is available.
-8. “Stop wheels” sends an immediate zero-duty command.
+4. The camera tracks a face through the expression controller.
+5. R08Y makes a small acknowledgement after the wake word, holds still while listening, shifts gently while thinking, and adds a restrained speaking bob.
+6. “How far?” reports ultrasonic distance.
+7. “Check light sensors” reports both sensor voltages.
+8. “Move forward” runs briefly only when valid clearance is available.
+9. “Stop wheels” sends an immediate zero-duty command.
 
 For the shortest live audio acceptance test, keep a second terminal on the log:
 

@@ -34,14 +34,7 @@ MOODS = {
     "normal":     {"rate": "+0%",  "volume": "+0%",  "gesture": "center"},
 }
 
-STORY_GESTURES = {
-    "nod":            [(None, -10), (None, 10), (None, 0)],
-    "lean_in":        [(0, 10)],
-    "dramatic_pause": [(0, -8)],
-    "look_down":      [(None, 15)],
-    "center":         [(0, 0)],
-    "scan":           [(-25, 0), (25, 0), (0, 0)],
-}
+STORY_GESTURES = {"nod", "lean_in", "dramatic_pause", "look_down", "center", "scan"}
 
 
 class Skill(BaseSkill):
@@ -152,18 +145,12 @@ class Skill(BaseSkill):
         return chunks
 
     async def _perform_gesture(self, gesture_name: str) -> None:
-        moves = STORY_GESTURES.get(gesture_name)
-        if not moves or not self.ctx.servo.available:
+        if gesture_name not in STORY_GESTURES or not self.ctx.expression.available:
             return
-        pan_ch, tilt_ch = 0, 1
-        home_pan = await self.ctx.servo.get_angle(pan_ch)
-        home_tilt = await self.ctx.servo.get_angle(tilt_ch)
-        for pan_delta, tilt_delta in moves:
-            if pan_delta is not None:
-                await self.ctx.servo.set_angle(pan_ch, home_pan + pan_delta)
-            if tilt_delta is not None:
-                await self.ctx.servo.set_angle(tilt_ch, home_tilt + tilt_delta)
-            await asyncio.sleep(0.3)
+        if gesture_name == "center":
+            await self.ctx.expression.home()
+        else:
+            await self.ctx.expression.perform_gesture(gesture_name)
 
     async def _deliver_story(self, chunks: List[Tuple[str, Optional[str]]]) -> None:
         """Deliver the story with mood-driven voice and movement changes."""
@@ -193,8 +180,8 @@ class Skill(BaseSkill):
         self.ctx.tts._config.rate = self._original_rate
         self.ctx.tts._config.volume = self._original_volume
         self._telling = False
-        if self.ctx.servo.available:
-            await self.ctx.servo.home()
+        if self.ctx.expression.available:
+            await self.ctx.expression.home()
         await self.ctx.event_bus.emit("story.ended", source=self.name)
 
     async def _start_story(self, topic: str, style: str) -> Optional[str]:

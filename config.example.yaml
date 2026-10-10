@@ -56,6 +56,19 @@ tracker:
   patrol_speed: 30
   no_face_timeout: 5.0
 
+# One motion owner blends tracking, gestures, and conversational body language.
+# Every target remains inside the servo limits above. Wheels are never used here.
+expression:
+  enabled: true
+  update_interval: 0.05
+  max_step_degrees: 3.0
+  gesture_scale: 1.0
+  ambient_enabled: true
+  idle_sway_degrees: 1.5
+  thinking_sway_degrees: 3.0
+  speaking_bob_degrees: 1.5
+  queue_size: 8
+
 audio:
   sample_rate: 16000       # Processing format used by wake word and STT
   channels: 1

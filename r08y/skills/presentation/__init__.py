@@ -36,16 +36,9 @@ class Segment:
     pause: float = 1.5  # Seconds to pause after speaking this segment
 
 
-# Camera choreography patterns used between presentation segments.
-# Each is a list of (pan_delta, tilt_delta) from home position.
-STAGE_MOVES = {
-    "scan_left":     [(-35, 0)],
-    "scan_right":    [(35, 0)],
-    "scan_center":   [(0, 0)],
-    "nod_emphasis":  [(None, -10), (None, 10), (None, -10), (None, 0)],
-    "look_audience": [(-25, 5), (25, 5), (0, 0)],
-    "dramatic_pause": [(0, -8)],  # Slight look up for emphasis
-    "sweep":         [(-40, 0), (40, 0), (0, 0)],
+STAGE_GESTURES = {
+    "scan_left", "scan_right", "scan_center", "nod_emphasis",
+    "look_audience", "dramatic_pause", "sweep",
 }
 
 # Cycle through these gestures for each segment
@@ -222,20 +215,12 @@ class Skill(BaseSkill):
 
     async def _perform_gesture(self, gesture_name: str) -> None:
         """Execute a stage movement if servos are available."""
-        moves = STAGE_MOVES.get(gesture_name)
-        if not moves or not self.ctx.servo.available:
+        if gesture_name not in STAGE_GESTURES or not self.ctx.expression.available:
             return
-
-        pan_ch, tilt_ch = 0, 1
-        home_pan = await self.ctx.servo.get_angle(pan_ch)
-        home_tilt = await self.ctx.servo.get_angle(tilt_ch)
-
-        for pan_delta, tilt_delta in moves:
-            if pan_delta is not None:
-                await self.ctx.servo.set_angle(pan_ch, home_pan + pan_delta)
-            if tilt_delta is not None:
-                await self.ctx.servo.set_angle(tilt_ch, home_tilt + tilt_delta)
-            await asyncio.sleep(0.4)
+        if gesture_name == "scan_center":
+            await self.ctx.expression.home()
+        else:
+            await self.ctx.expression.perform_gesture(gesture_name)
 
     async def _boost_volume(self) -> None:
         """Increase TTS volume for presentation projection."""
@@ -290,7 +275,8 @@ class Skill(BaseSkill):
         # Wrap up
         self._presenting = False
         await self._restore_volume()
-        await self.ctx.servo.home() if self.ctx.servo.available else None
+        if self.ctx.expression.available:
+            await self.ctx.expression.home()
 
         elapsed = time.monotonic() - self._start_time
         await self.ctx.event_bus.emit(
