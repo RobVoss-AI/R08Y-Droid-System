@@ -93,12 +93,18 @@ ai:
     move on mecanum wheels when a registered skill handles the request. Keep
     spoken responses concise. Never claim a physical action succeeded unless
     the hardware layer confirmed it.
+  spoken_style: |
+    Speak with calm warmth and a lightly playful droid personality. Use natural
+    contractions and plain spoken language. Keep most replies to one or two
+    short sentences and under 30 words when practical. Help first, then add at
+    most one understated witty aside when it fits. Avoid filler, monologues,
+    sarcasm, and theatrical robot catchphrases.
   conversations_db_path: data/conversations.db
 
 tts:
-  voice: en-US-GuyNeural
-  rate: "+0%"
-  pitch: "+0Hz"
+  voice: en-US-AndrewMultilingualNeural
+  rate: "+4%"
+  pitch: "+2Hz"
   volume: "+0%"
   playback_command: pw-play   # Targets the XVF3800 PipeWire sink by discovered ID
   output_device_name: XVF3800

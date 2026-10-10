@@ -13,7 +13,10 @@ def test_example_config_is_valid():
     assert config.audio.hardware_channels == 2
     assert config.audio.capture_backend == "auto"
     assert config.tts.playback_command == "pw-play"
-    assert config.tts.pitch == "+0Hz"
+    assert config.tts.voice == "en-US-AndrewMultilingualNeural"
+    assert config.tts.rate == "+4%"
+    assert config.tts.pitch == "+2Hz"
+    assert "lightly playful droid personality" in config.ai.spoken_style
     assert config.mobility.require_distance_for_forward is True
 
 
@@ -24,6 +27,16 @@ def test_shared_freenove_path_propagates(monkeypatch, tmp_path):
     assert config.servos.freenove_library_path == "/example/freenove"
     assert config.distance.freenove_library_path == "/example/freenove"
     assert config.mobility.freenove_library_path == "/example/freenove"
+
+
+def test_existing_config_inherits_spoken_style_when_field_is_absent(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("ai:\n  system_prompt: You are R08Y.\n")
+
+    config = load_config(str(config_file))
+
+    assert config.ai.system_prompt == "You are R08Y."
+    assert "natural contractions" in config.ai.spoken_style
 
 
 def test_invalid_gpio_placeholders_are_rejected(tmp_path):

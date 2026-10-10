@@ -254,8 +254,8 @@ async def run_speech_test(
 
     tts = tts_factory(config.tts)
     message = (
-        "Hello, Rob. My audio systems are online. "
-        "I'm ready to talk whenever you are."
+        "Hi, Rob. I'm R08Y, and my audio systems are online. "
+        "Ready when you are."
     )
     emit(
         f"R08Y speech test: voice={config.tts.voice}, rate={config.tts.rate}, "

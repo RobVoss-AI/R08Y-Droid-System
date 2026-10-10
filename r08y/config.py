@@ -116,14 +116,21 @@ class AIConfig:
         "and remember conversations. Keep responses conversational and concise — "
         "you're speaking out loud, not writing an essay."
     )
+    spoken_style: str = (
+        "Speak with calm warmth and a lightly playful droid personality. Use natural "
+        "contractions and plain spoken language. Keep most replies to one or two short "
+        "sentences and under 30 words when practical. Help first, then add at most one "
+        "understated witty aside when it fits. Avoid filler, monologues, sarcasm, and "
+        "theatrical robot catchphrases."
+    )
     conversations_db_path: str = "data/conversations.db"
 
 
 @dataclass
 class TTSConfig:
-    voice: str = "en-US-GuyNeural"
-    rate: str = "+0%"
-    pitch: str = "+0Hz"
+    voice: str = "en-US-AndrewMultilingualNeural"
+    rate: str = "+4%"
+    pitch: str = "+2Hz"
     volume: str = "+0%"
     playback_command: str = "pw-play"
     output_device_name: str = "XVF3800"

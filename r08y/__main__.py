@@ -36,6 +36,18 @@ def main():
         help="Speak a short TTS audition without starting other hardware",
     )
     parser.add_argument(
+        "--speech-voice",
+        help="Temporarily override the voice for --speech-test",
+    )
+    parser.add_argument(
+        "--speech-rate",
+        help="Temporarily override the rate for --speech-test, such as +4%%",
+    )
+    parser.add_argument(
+        "--speech-pitch",
+        help="Temporarily override the pitch for --speech-test, such as +2Hz",
+    )
+    parser.add_argument(
         "--exercise-hardware",
         action="store_true",
         help="Open camera/audio/sensors and home pan/tilt during smoke test",
@@ -59,6 +71,16 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
+    speech_overrides = {
+        "voice": args.speech_voice,
+        "rate": args.speech_rate,
+        "pitch": args.speech_pitch,
+    }
+    if any(speech_overrides.values()) and not args.speech_test:
+        parser.error("speech overrides require --speech-test")
+    for field, value in speech_overrides.items():
+        if value is not None:
+            setattr(config.tts, field, value)
     errors = validate_config(config)
     if args.check_config:
         if errors:

@@ -136,6 +136,11 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 # Speak a fixed sentence with the configured voice, rate, pitch, and volume
 ./venv/bin/python -m r08y --config config.yaml --speech-test
 
+# Audition a voice without changing config.yaml
+./venv/bin/python -m r08y --config config.yaml --speech-test \
+  --speech-voice en-US-AndrewMultilingualNeural \
+  --speech-rate=+4% --speech-pitch=+2Hz
+
 # Camera, pan/tilt home, sensors, microphone, and speaker tone
 ./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware
 
