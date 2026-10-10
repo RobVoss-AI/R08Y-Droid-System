@@ -29,6 +29,7 @@ class CameraConfig:
 @dataclass
 class FaceDetectionConfig:
     method: str = "haar"
+    cascade_path: Optional[str] = None
     scale_factor: float = 1.3
     min_neighbors: int = 5
     detection_width: int = 320
@@ -316,6 +317,8 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("audio capture_backend must be auto, alsa, or pyaudio")
     if config.wake_word.engine not in {"porcupine", "rms"}:
         errors.append("wake_word engine must be porcupine or rms")
+    if config.face_detection.method not in {"haar", "dnn"}:
+        errors.append("face_detection method must be haar or dnn")
     if not config.wake_word.phrase.strip():
         errors.append("wake_word phrase must not be empty")
     if not 0 <= config.wake_word.sensitivity <= 1:

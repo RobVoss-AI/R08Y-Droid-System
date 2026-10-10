@@ -26,7 +26,7 @@ sudo apt-get install -y \
     libopenblas-dev portaudio19-dev \
     ffmpeg mpv alsa-utils i2c-tools pipewire-bin wireplumber git
 
-for optional_package in python3-picamera2 python3-dlib; do
+for optional_package in python3-picamera2 python3-dlib opencv-data; do
     if apt-cache show "${optional_package}" >/dev/null 2>&1; then
         sudo apt-get install -y "${optional_package}"
     else

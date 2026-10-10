@@ -72,6 +72,13 @@ async def vision_pipeline(
         logger.warning("Camera not available — vision pipeline disabled")
         await shutdown.wait()
         return
+    if not getattr(face_detector, "available", True):
+        logger.warning(
+            "Face detection unavailable; vision pipeline disabled: %s",
+            getattr(face_detector, "detail", "detector unavailable"),
+        )
+        await shutdown.wait()
+        return
 
     recognition_interval = 2.0  # Run expensive recognition every N seconds
     last_recognition_time = 0.0
@@ -434,6 +441,7 @@ async def run(config_path: str = "config.yaml") -> None:
             distance=distance,
             light_sensors=light_sensors,
             mobility=mobility,
+            face_detector=face_detector,
         )
         state.hardware_status = health.as_dict()
         logger.info("Hardware health: %s", health.summary())

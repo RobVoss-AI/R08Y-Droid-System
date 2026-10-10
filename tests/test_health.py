@@ -20,6 +20,10 @@ def test_runtime_health_reports_exact_capabilities(monkeypatch, tmp_path):
         report = await collect_runtime_health(
             R08YConfig(),
             camera=SimpleNamespace(available=True, backend="opencv"),
+            face_detector=SimpleNamespace(
+                available=True,
+                detail="Debian Haar cascade loaded",
+            ),
             servo=SimpleNamespace(available=True),
             voice_input=SimpleNamespace(
                 available=True,
@@ -38,6 +42,7 @@ def test_runtime_health_reports_exact_capabilities(monkeypatch, tmp_path):
         )
         assert report.ready
         assert report.components["microphone"].detail == "XVF3800 native capture passed"
+        assert report.components["face_detection"].detail == "Debian Haar cascade loaded"
         assert report.components["wake_word"].detail == "listening for 'ROBY'"
         assert report.components["ultrasonic"].detail == "88.0 cm"
         assert report.components["speaker_path"].detail == "XVF3800 PipeWire sink selected"

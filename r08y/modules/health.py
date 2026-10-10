@@ -83,6 +83,7 @@ async def collect_runtime_health(
     distance,
     light_sensors,
     mobility,
+    face_detector=None,
 ) -> HealthReport:
     """Describe initialized components and sample passive sensors once."""
     report = HealthReport()
@@ -97,6 +98,11 @@ async def collect_runtime_health(
         "pass" if camera.available else ("skip" if not config.camera.enabled else "fail"),
         f"backend={camera.backend}" if camera.available else "not available",
     )
+    if face_detector is not None:
+        report.components["face_detection"] = ComponentHealth(
+            "pass" if getattr(face_detector, "available", False) else "warn",
+            getattr(face_detector, "detail", type(face_detector).__name__),
+        )
     report.components["pan_tilt"] = ComponentHealth(
         "pass" if servo.available else ("skip" if not config.servos.enabled else "fail"),
         type(servo).__name__,

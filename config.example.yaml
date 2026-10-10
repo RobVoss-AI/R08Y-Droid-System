@@ -20,6 +20,7 @@ camera:
 
 face_detection:
   method: haar
+  cascade_path: null       # Auto-discovers pip or Debian opencv-data locations
   scale_factor: 1.3
   min_neighbors: 5
   detection_width: 320

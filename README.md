@@ -44,6 +44,7 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 ## Notes for maintainers
 
 - R08Y does not copy or guess Freenove pin and PWM mappings. It loads the official `motor.py`, `servo.py`, `ultrasonic.py`, and `adc.py` modules from the Freenove `Code/Server` directory.
+- Haar face detection resolves both pip OpenCV data and Debian's `/usr/share/opencv4/haarcascades` location. The installer adds `opencv-data` when available; missing cascade data disables vision without taking voice offline.
 - The official Freenove `params.json` must identify the connector, controller PCB, and Pi generation before ADC light-sensor initialization. R08Y refuses to trigger the upstream interactive prompt inside the service.
 - Numeric audio indexes are unstable across reboots. Input and output default to a strict name match for `XVF3800`; R08Y will not silently speak through another sink.
 - The XVF3800 uses a name-resolved `arecord` stream at its verified native S16_LE, 16 kHz, two-channel format. Reads have a hard timeout, and R08Y downmixes to 16 kHz mono for wake word and STT processing. Other microphones retain the PyAudio fallback.

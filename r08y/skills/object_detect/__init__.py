@@ -49,10 +49,7 @@ class Skill(BaseSkill):
     async def start(self):
         await super().start()
         try:
-            # Load MobileNet SSD (ships with OpenCV or downloadable)
-            prototxt = cv2.data.haarcascades.replace("haarcascade_", "").rstrip("/") + "/../dnn/MobileNetSSD_deploy.prototxt"
-            model = cv2.data.haarcascades.replace("haarcascade_", "").rstrip("/") + "/../dnn/MobileNetSSD_deploy.caffemodel"
-            # Fallback: try loading from data directory
+            # Model files are deployment assets, not part of every OpenCV package.
             from pathlib import Path
             data = Path(self.ctx.data_dir)
             proto_path = data / "MobileNetSSD_deploy.prototxt"

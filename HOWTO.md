@@ -391,6 +391,7 @@ Do not install the UPS HAT during the speaker and full-system acceptance pass. O
 - No sound: verify the speaker is on the documented JST connector and confirm the XVF3800 sink and volume.
 - ROBY not armed: confirm `R08Y_PICOVOICE_KEY` is set locally, `R08Y_WAKE_WORD_PATH` points to the installed Raspberry Pi `.ppn`, source the environment for manual tests, and rerun Gate D.
 - ROBY test times out: face the array, say only “ROBY” at normal conversational volume, and raise `wake_word.sensitivity` in small steps. Keep the value between `0.0` and `1.0`.
+- `cv2` has no attribute `data`: pull the current branch and rerun `bash install.sh`. The installer adds Debian's `opencv-data`, and R08Y now resolves its system cascade path directly. If cascade data is still unavailable, face detection is disabled while voice remains online.
 - No camera frame: list `/dev/video*`, then set `camera.device_path` only after identifying the correct node.
 - Forward blocked: fix the ultrasonic reading. Do not disable the guard for normal operation.
 - Motor direction wrong: correct `wheel_scale` with wheels raised. Do not guess at GPIO or PWM mappings.
