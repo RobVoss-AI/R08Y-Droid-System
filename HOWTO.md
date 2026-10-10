@@ -189,7 +189,7 @@ sudo install -o rob -g rob -m 0640 \
 ls -l /opt/r08y/wake_words/roby.ppn
 ```
 
-The installer adds `rob` to the `r08y` group. If the environment file is not readable in the current shell, exit SSH and reconnect before testing. Load the protected environment without printing its values:
+The installer makes the environment file group-readable by the install user. Load it into the current shell without printing its values:
 
 ```bash
 set -a
