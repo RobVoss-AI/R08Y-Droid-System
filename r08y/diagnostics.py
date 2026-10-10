@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
-from typing import List
+from typing import Callable, List, Optional
 
 from r08y.config import R08YConfig, validate_config
 from r08y.hardware.freenove import FreenoveLibrary, discover_freenove_path
@@ -163,6 +164,82 @@ def _passive_checks(config: R08YConfig) -> List[SmokeResult]:
     return results
 
 
+async def run_audio_test(
+    config: R08YConfig,
+    *,
+    voice_factory: Optional[Callable] = None,
+    tts_factory: Optional[Callable] = None,
+    tone_factory: Optional[Callable] = None,
+    emit: Callable[[str], None] = lambda message: print(message, flush=True),
+) -> List[SmokeResult]:
+    """Run a guided microphone and speaker test without starting other hardware."""
+    if voice_factory is None:
+        from r08y.modules.voice_input import VoiceInput
+
+        voice_factory = VoiceInput
+    if tts_factory is None:
+        from r08y.modules.text_to_speech import TextToSpeech
+
+        tts_factory = TextToSpeech
+    if tone_factory is None:
+        from r08y.skills.sound_effects import _generate_wav
+
+        tone_factory = _generate_wav
+
+    voice = voice_factory(config.audio, config.wake_word)
+    tts = tts_factory(config.tts)
+    results: List[SmokeResult] = []
+    emit("R08Y audio test starting. Do not speak until READY appears.")
+    try:
+        await asyncio.gather(voice.start(), tts.start())
+        if voice.available:
+            seconds = 2.0
+            chunks = max(
+                1,
+                math.ceil(seconds * config.audio.sample_rate / config.audio.chunk_size),
+            )
+            emit(
+                "READY: Say 'R08Y audio check' once. "
+                "Sampling stops automatically after two seconds."
+            )
+            level = await voice.measure_level(chunks=chunks)
+            emit("Microphone sampling complete. You can stop talking.")
+            results.append(
+                _result(
+                    "microphone_capture",
+                    level is not None and level > 0,
+                    (
+                        f"{voice.capture_detail}; average RMS={level:.1f}"
+                        if level is not None
+                        else voice.capture_detail
+                    ),
+                )
+            )
+        else:
+            results.append(_result("microphone_capture", False, voice.capture_detail))
+
+        emit("SPEAKER: A short tone will play now.")
+        played = await tts.play_wav_bytes(tone_factory(660, 0.2))
+        results.append(
+            _result(
+                "speaker_command",
+                played,
+                (
+                    "test tone command completed; confirm sound was audible"
+                    if played
+                    else "speaker command failed; no test tone was sent"
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(
+            SmokeResult("audio_test", "fail", f"{type(exc).__name__}: {exc}")
+        )
+    finally:
+        await asyncio.gather(voice.stop(), tts.stop(), return_exceptions=True)
+    return results
+
+
 async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> List[SmokeResult]:
     # Imports are deferred so passive diagnostics can still explain missing Pi packages.
     from r08y.modules.camera import CameraCapture
@@ -183,6 +260,10 @@ async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> Lis
     mobility = create_mobility_controller(config.mobility, distance)
 
     try:
+        print(
+            "Full hardware exercise starting. Do not speak until the microphone prompt appears.",
+            flush=True,
+        )
         await light_sensors.start()
         await asyncio.gather(
             camera.start(), servo.start(), distance.start(), voice.start(), tts.start()
@@ -214,7 +295,16 @@ async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> Lis
                 f"left={light.left_volts:.2f}V right={light.right_volts:.2f}V" if light else "no reading",
             )
         )
-        level = await voice.measure_level()
+        print(
+            "READY: Say 'R08Y audio check' once. Sampling stops automatically after two seconds.",
+            flush=True,
+        )
+        microphone_chunks = max(
+            1,
+            math.ceil(2.0 * config.audio.sample_rate / config.audio.chunk_size),
+        )
+        level = await voice.measure_level(chunks=microphone_chunks)
+        print("Microphone sampling complete. You can stop talking.", flush=True)
         level_ok = level is not None and level > 0
         results.append(
             _result(
@@ -232,7 +322,11 @@ async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> Lis
             _result(
                 "speaker_command",
                 played,
-                "test tone command completed; confirm sound was audible",
+                (
+                    "test tone command completed; confirm sound was audible"
+                    if played
+                    else "speaker command failed; no test tone was sent"
+                ),
             )
         )
 
@@ -278,10 +372,14 @@ async def run_smoke_test(
     return results
 
 
-def print_smoke_results(results: List[SmokeResult], as_json: bool = False) -> None:
+def print_smoke_results(
+    results: List[SmokeResult],
+    as_json: bool = False,
+    heading: str = "R08Y hardware smoke test",
+) -> None:
     if as_json:
         print(json.dumps([asdict(result) for result in results], indent=2))
         return
-    print("R08Y hardware smoke test")
+    print(heading)
     for result in results:
         print(f"[{result.status.upper():4}] {result.name}: {result.detail}")

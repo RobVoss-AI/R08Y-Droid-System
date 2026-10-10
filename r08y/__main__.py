@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import os
 import sys
 
 from r08y.config import load_config, validate_config
@@ -23,6 +24,11 @@ def main():
         "--smoke-test",
         action="store_true",
         help="Run passive Pi hardware discovery and exit",
+    )
+    parser.add_argument(
+        "--audio-test",
+        action="store_true",
+        help="Run a guided XVF3800 microphone and speaker test only",
     )
     parser.add_argument(
         "--exercise-hardware",
@@ -57,6 +63,26 @@ def main():
         print("Configuration is valid.")
         return
 
+    if args.audio_test and args.smoke_test:
+        parser.error("--audio-test and --smoke-test are separate test modes")
+    if args.audio_test and (args.exercise_hardware or args.exercise_mobility):
+        parser.error("hardware exercise flags cannot be combined with --audio-test")
+
+    if args.audio_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_audio_test
+
+        try:
+            results = asyncio.run(run_audio_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y audio test stopped.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y guided audio test")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
     if args.exercise_mobility and not args.confirm_wheels_raised:
         parser.error("--exercise-mobility requires --confirm-wheels-raised")
     if (args.exercise_hardware or args.exercise_mobility) and not args.smoke_test:
@@ -74,8 +100,10 @@ def main():
                 )
             )
         except KeyboardInterrupt:
-            print("\nR08Y hardware smoke test stopped.")
-            sys.exit(130)
+            print("\nR08Y hardware smoke test stopped.", flush=True)
+            # A native camera call can remain blocked in a worker thread. The OS
+            # releases its devices when this diagnostic process exits.
+            os._exit(130)
         print_smoke_results(results, as_json=args.json)
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 

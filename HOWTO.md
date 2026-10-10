@@ -159,7 +159,7 @@ power:
   ups_enabled: false
 ```
 
-## 6. Validate in four gates
+## 6. Validate in five gates
 
 ### Gate A: configuration only
 
@@ -188,7 +188,36 @@ Expected passes:
 
 The UPS result should remain `SKIP`.
 
-### Gate C: camera, pan/tilt, sensors, microphone, and speaker
+### Gate C: guided microphone and speaker test
+
+This step does not start the camera, servos, sensors, or motors:
+
+```bash
+./venv/bin/python -m r08y --config config.yaml --audio-test
+```
+
+Wait for the `READY` line. Say “R08Y audio check” once. Sampling stops automatically after two seconds, and the terminal tells you when to stop talking. A short 660 Hz speaker tone follows.
+
+Confirm both results pass and that the tone is clearly audible. If the tone command passes but nothing is audible, inspect `wpctl status -n` and XVF3800 playback volume. Do not reflash firmware during this first pass; headphone playback already proved the USB output path.
+
+R08Y resolves the XVF3800 with `arecord -l`, then opens that current card/device at its verified native `S16_LE`, two-channel, 16 kHz capture format. It does not store card 3 as a fixed setting. Capture reads have a hard deadline, and audio is downmixed to 16 kHz mono for the wake word and STT. Other USB microphones retain the PyAudio fallback.
+
+If `microphone_capture` reports the known immediate ALSA I/O error, stop retrying and reseat USB:
+
+```bash
+sudo systemctl stop r08y 2>/dev/null || true
+```
+
+Physically unplug the XVF3800 USB cable, wait 10 seconds, reconnect it, and wait another 10 seconds. Then confirm the device has returned and rerun Gate C:
+
+```bash
+arecord -l
+wpctl status -n
+cd /opt/r08y
+./venv/bin/python -m r08y --config config.yaml --audio-test
+```
+
+### Gate D: camera, pan/tilt, sensors, microphone, and speaker
 
 Keep the wheels raised:
 
@@ -206,27 +235,9 @@ Confirm all of the following:
 - microphone average RMS is above zero when you speak
 - the short 660 Hz tone is clearly audible from the new speaker
 
-If the tone command passes but nothing is audible, inspect `wpctl status -n` and XVF3800 playback volume. Do not reflash firmware during this first pass; headphone playback already proved the USB output path.
+The command says not to speak during startup, prints `READY` before its two-second microphone sample, and tells you when the sample is complete. Pressing Ctrl-C exits the diagnostic process immediately if a native camera operation is stuck.
 
-R08Y resolves the XVF3800 with `arecord -l`, then opens that current card/device at its verified native `S16_LE`, two-channel, 16 kHz capture format. It does not store card 3 as a fixed setting. Capture reads have a hard deadline, and audio is downmixed to 16 kHz mono for the wake word and STT. Other USB microphones retain the PyAudio fallback.
-
-If `microphone_capture` reports the known immediate ALSA I/O error, stop retrying and reseat USB:
-
-```bash
-sudo systemctl stop r08y 2>/dev/null || true
-```
-
-Physically unplug the XVF3800 USB cable, wait 10 seconds, reconnect it, and wait another 10 seconds. Then confirm the device has returned and rerun Gate C:
-
-```bash
-arecord -l
-wpctl status -n
-cd /opt/r08y
-./venv/bin/python -m r08y --config config.yaml \
-  --smoke-test --exercise-hardware
-```
-
-### Gate D: guarded motor exercise
+### Gate E: guarded motor exercise
 
 Verify again that every wheel is clear. Then run:
 

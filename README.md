@@ -130,6 +130,9 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 # Passive Pi discovery; no motors, servo movement, camera, or audio playback
 ./venv/bin/python -m r08y --config config.yaml --smoke-test
 
+# Guided two-second microphone sample and speaker tone; no other hardware
+./venv/bin/python -m r08y --config config.yaml --audio-test
+
 # Camera, pan/tilt home, sensors, microphone, and speaker tone
 ./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware
 
