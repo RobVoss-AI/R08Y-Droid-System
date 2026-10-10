@@ -14,7 +14,7 @@ def test_example_config_is_valid():
     assert config.audio.capture_backend == "auto"
     assert config.tts.playback_command == "pw-play"
     assert config.tts.voice == "en-US-AndrewMultilingualNeural"
-    assert config.tts.rate == "+4%"
+    assert config.tts.rate == "+1%"
     assert config.tts.pitch == "+2Hz"
     assert "lightly playful droid personality" in config.ai.spoken_style
     assert config.mobility.require_distance_for_forward is True

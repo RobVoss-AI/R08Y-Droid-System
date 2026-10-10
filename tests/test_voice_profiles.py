@@ -17,5 +17,5 @@ def test_default_profile_restores_warm_droid_voice_and_tone():
 
     assert result == "Switched to default voice."
     assert tts_config.voice == "en-US-AndrewMultilingualNeural"
-    assert tts_config.rate == "+4%"
+    assert tts_config.rate == "+1%"
     assert tts_config.pitch == "+2Hz"

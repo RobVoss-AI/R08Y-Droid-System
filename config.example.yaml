@@ -103,7 +103,7 @@ ai:
 
 tts:
   voice: en-US-AndrewMultilingualNeural
-  rate: "+4%"
+  rate: "+1%"
   pitch: "+2Hz"
   volume: "+0%"
   playback_command: pw-play   # Targets the XVF3800 PipeWire sink by discovered ID

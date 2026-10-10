@@ -12,7 +12,7 @@ from r08y.skills._base import BaseSkill, PipelineHook, SkillManifest, VoiceComma
 PROFILES: Dict[str, dict] = {
     "default": {
         "voice": "en-US-AndrewMultilingualNeural",
-        "rate": "+4%",
+        "rate": "+1%",
         "pitch": "+2Hz",
         "transform": None,
     },

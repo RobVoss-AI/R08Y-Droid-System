@@ -41,7 +41,7 @@ def main():
     )
     parser.add_argument(
         "--speech-rate",
-        help="Temporarily override the rate for --speech-test, such as +4%%",
+        help="Temporarily override the rate for --speech-test, such as +1%%",
     )
     parser.add_argument(
         "--speech-pitch",

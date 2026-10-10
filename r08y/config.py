@@ -129,7 +129,7 @@ class AIConfig:
 @dataclass
 class TTSConfig:
     voice: str = "en-US-AndrewMultilingualNeural"
-    rate: str = "+4%"
+    rate: str = "+1%"
     pitch: str = "+2Hz"
     volume: str = "+0%"
     playback_command: str = "pw-play"

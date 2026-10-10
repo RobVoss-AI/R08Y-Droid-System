@@ -103,7 +103,7 @@ def test_speech_test_auditions_configured_voice_without_other_hardware():
     )
 
     assert "voice=en-US-AndrewMultilingualNeural" in messages[0]
-    assert "rate=+4%" in messages[0]
+    assert "rate=+1%" in messages[0]
     assert "pitch=+2Hz" in messages[0]
     assert messages[1] == "R08Y will speak now."
     assert tts.spoken.startswith("Hi, Rob. I'm R08Y")
