@@ -145,6 +145,10 @@ audio:
 tts:
   playback_command: pw-play
   output_device_name: XVF3800
+  voice: en-US-GuyNeural
+  rate: "+0%"
+  pitch: "+0Hz"
+  volume: "+0%"
   set_pipewire_default: true
   require_output_device_match: true
 
@@ -199,6 +203,14 @@ This step does not start the camera, servos, sensors, or motors:
 Wait for the `READY` line. Say “R08Y audio check” once. Sampling stops automatically after two seconds, and the terminal tells you when to stop talking. A short 660 Hz speaker tone follows.
 
 Confirm both results pass and that the tone is clearly audible. If the tone command passes but nothing is audible, inspect `wpctl status -n` and XVF3800 playback volume. Do not reflash firmware during this first pass; headphone playback already proved the USB output path.
+
+After the tone passes, audition the configured speaking voice without starting any other hardware:
+
+```bash
+./venv/bin/python -m r08y --config config.yaml --speech-test
+```
+
+This says one fixed sentence using `tts.voice`, `rate`, `pitch`, and `volume`. Adjust one value at a time in `config.yaml`, validate the configuration, and rerun the speech test. Keep speaker loudness in the XVF3800 mixer; use `tts.volume` only for relative speech adjustment.
 
 R08Y resolves the XVF3800 with `arecord -l`, then opens that current card/device at its verified native `S16_LE`, two-channel, 16 kHz capture format. It does not store card 3 as a fixed setting. Capture reads have a hard deadline, and audio is downmixed to 16 kHz mono for the wake word and STT. Other USB microphones retain the PyAudio fallback.
 

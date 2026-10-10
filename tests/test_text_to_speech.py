@@ -1,4 +1,6 @@
 import asyncio
+from pathlib import Path
+from types import SimpleNamespace
 
 from r08y.config import TTSConfig
 from r08y.modules.audio_devices import AudioDevice
@@ -65,3 +67,46 @@ def test_pw_play_targets_discovered_sink():
         "89",
         "speech.wav",
     ]
+
+
+def test_synthesis_passes_configured_voice_tone(monkeypatch):
+    captured = {}
+
+    class FakeCommunicate:
+        def __init__(self, text, **kwargs):
+            captured["text"] = text
+            captured.update(kwargs)
+
+        async def save(self, path):
+            Path(path).write_bytes(b"mp3")
+
+    async def run():
+        monkeypatch.setattr(
+            text_to_speech,
+            "edge_tts",
+            SimpleNamespace(Communicate=FakeCommunicate),
+        )
+        tts = TextToSpeech(
+            TTSConfig(
+                voice="en-US-GuyNeural",
+                rate="-5%",
+                pitch="-8Hz",
+                volume="+0%",
+                playback_command="mpv",
+            )
+        )
+
+        async def fake_play(_path, is_wav=False):
+            assert not is_wav
+
+        monkeypatch.setattr(tts, "_play_path", fake_play)
+        await tts._synthesize_and_play("Hello, Rob.")
+
+    asyncio.run(run())
+    assert captured == {
+        "text": "Hello, Rob.",
+        "voice": "en-US-GuyNeural",
+        "rate": "-5%",
+        "pitch": "-8Hz",
+        "volume": "+0%",
+    }

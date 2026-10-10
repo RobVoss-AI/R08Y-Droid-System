@@ -133,6 +133,9 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 # Guided two-second microphone sample and speaker tone; no other hardware
 ./venv/bin/python -m r08y --config config.yaml --audio-test
 
+# Speak a fixed sentence with the configured voice, rate, pitch, and volume
+./venv/bin/python -m r08y --config config.yaml --speech-test
+
 # Camera, pan/tilt home, sensors, microphone, and speaker tone
 ./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware
 

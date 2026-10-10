@@ -5,6 +5,7 @@ for sensitive values (API keys).
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Union
@@ -122,6 +123,7 @@ class AIConfig:
 class TTSConfig:
     voice: str = "en-US-GuyNeural"
     rate: str = "+0%"
+    pitch: str = "+0Hz"
     volume: str = "+0%"
     playback_command: str = "pw-play"
     output_device_name: str = "XVF3800"
@@ -287,6 +289,12 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("audio hardware_channels must be positive or null")
     if config.audio.capture_backend not in {"auto", "alsa", "pyaudio"}:
         errors.append("audio capture_backend must be auto, alsa, or pyaudio")
+    if not re.fullmatch(r"[+-]\d+%", config.tts.rate):
+        errors.append("tts rate must use a signed percentage such as +0% or -10%")
+    if not re.fullmatch(r"[+-]\d+Hz", config.tts.pitch):
+        errors.append("tts pitch must use signed Hz such as +0Hz or -10Hz")
+    if not re.fullmatch(r"[+-]\d+%", config.tts.volume):
+        errors.append("tts volume must use a signed percentage such as +0% or -10%")
     if config.servos.driver == "gpio" and (
         config.servos.gpio_pan_pin is None or config.servos.gpio_tilt_pin is None
     ):

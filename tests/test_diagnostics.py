@@ -1,7 +1,7 @@
 import asyncio
 
 from r08y.config import R08YConfig
-from r08y.diagnostics import run_audio_test
+from r08y.diagnostics import run_audio_test, run_speech_test
 
 
 class FakeVoice:
@@ -66,4 +66,47 @@ def test_guided_audio_test_prompts_and_stops_sampling_automatically():
     ]
     assert voice.stopped
     assert tts.played
+    assert tts.stopped
+
+
+class FakeSpeechTTS:
+    available = False
+    output_detail = "XVF3800 selected"
+    last_error = None
+
+    def __init__(self):
+        self.spoken = None
+        self.stopped = False
+
+    async def start(self):
+        self.available = True
+
+    async def speak_and_wait(self, text):
+        self.spoken = text
+        return True
+
+    async def stop(self):
+        self.stopped = True
+
+
+def test_speech_test_auditions_configured_voice_without_other_hardware():
+    tts = FakeSpeechTTS()
+    messages = []
+    config = R08YConfig()
+
+    results = asyncio.run(
+        run_speech_test(
+            config,
+            tts_factory=lambda _config: tts,
+            emit=messages.append,
+        )
+    )
+
+    assert "voice=en-US-GuyNeural" in messages[0]
+    assert "pitch=+0Hz" in messages[0]
+    assert messages[1] == "R08Y will speak now."
+    assert tts.spoken.startswith("Hello, Rob.")
+    assert [(result.name, result.status) for result in results] == [
+        ("speech_playback", "pass")
+    ]
     assert tts.stopped

@@ -240,6 +240,56 @@ async def run_audio_test(
     return results
 
 
+async def run_speech_test(
+    config: R08YConfig,
+    *,
+    tts_factory: Optional[Callable] = None,
+    emit: Callable[[str], None] = lambda message: print(message, flush=True),
+) -> List[SmokeResult]:
+    """Speak a fixed audition line without starting input or other hardware."""
+    if tts_factory is None:
+        from r08y.modules.text_to_speech import TextToSpeech
+
+        tts_factory = TextToSpeech
+
+    tts = tts_factory(config.tts)
+    message = (
+        "Hello, Rob. My audio systems are online. "
+        "I'm ready to talk whenever you are."
+    )
+    emit(
+        f"R08Y speech test: voice={config.tts.voice}, rate={config.tts.rate}, "
+        f"pitch={config.tts.pitch}, volume={config.tts.volume}"
+    )
+    try:
+        await tts.start()
+        if not tts.available:
+            return [
+                _result(
+                    "speech_playback",
+                    False,
+                    tts.output_detail,
+                )
+            ]
+        emit("R08Y will speak now.")
+        played = await tts.speak_and_wait(message)
+        return [
+            _result(
+                "speech_playback",
+                played,
+                (
+                    "speech synthesis and playback completed"
+                    if played
+                    else f"speech failed: {tts.last_error or 'unknown error'}"
+                ),
+            )
+        ]
+    except Exception as exc:
+        return [SmokeResult("speech_playback", "fail", f"{type(exc).__name__}: {exc}")]
+    finally:
+        await tts.stop()
+
+
 async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> List[SmokeResult]:
     # Imports are deferred so passive diagnostics can still explain missing Pi packages.
     from r08y.modules.camera import CameraCapture

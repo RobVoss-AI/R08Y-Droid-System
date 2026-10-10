@@ -31,6 +31,11 @@ def main():
         help="Run a guided XVF3800 microphone and speaker test only",
     )
     parser.add_argument(
+        "--speech-test",
+        action="store_true",
+        help="Speak a short TTS audition without starting other hardware",
+    )
+    parser.add_argument(
         "--exercise-hardware",
         action="store_true",
         help="Open camera/audio/sensors and home pan/tilt during smoke test",
@@ -63,10 +68,15 @@ def main():
         print("Configuration is valid.")
         return
 
-    if args.audio_test and args.smoke_test:
-        parser.error("--audio-test and --smoke-test are separate test modes")
-    if args.audio_test and (args.exercise_hardware or args.exercise_mobility):
-        parser.error("hardware exercise flags cannot be combined with --audio-test")
+    selected_test_modes = sum(
+        bool(selected) for selected in (args.audio_test, args.speech_test, args.smoke_test)
+    )
+    if selected_test_modes > 1:
+        parser.error("--audio-test, --speech-test, and --smoke-test are separate test modes")
+    if (args.audio_test or args.speech_test) and (
+        args.exercise_hardware or args.exercise_mobility
+    ):
+        parser.error("hardware exercise flags cannot be combined with audio test modes")
 
     if args.audio_test:
         if errors:
@@ -81,6 +91,21 @@ def main():
             print("\nR08Y audio test stopped.", flush=True)
             os._exit(130)
         print_smoke_results(results, heading="R08Y guided audio test")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
+    if args.speech_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_speech_test
+
+        try:
+            results = asyncio.run(run_speech_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y speech test stopped.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y speech audition")
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 
     if args.exercise_mobility and not args.confirm_wheels_raised:

@@ -36,6 +36,7 @@ class TextToSpeech:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._interrupted = False
+        self._last_error: Optional[str] = None
         self._play_lock = asyncio.Lock()
         self._resolved_target: Optional[str] = config.output_target
         self.output_detail = "playback path has not been checked"
@@ -126,11 +127,13 @@ class TextToSpeech:
         if self.available and text.strip():
             await self._queue.put(text)
 
-    async def speak_and_wait(self, text: str) -> None:
+    async def speak_and_wait(self, text: str) -> bool:
         if not self.available or not text.strip():
-            return
+            return False
+        self._last_error = None
         await self._queue.put(text)
         await self._queue.join()
+        return self._last_error is None
 
     async def _playback_worker(self) -> None:
         while True:
@@ -138,10 +141,12 @@ class TextToSpeech:
             try:
                 text = await self._queue.get()
                 self._interrupted = False
+                self._last_error = None
                 await self._synthesize_and_play(text)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as exc:
+                self._last_error = f"{type(exc).__name__}: {exc}"
                 logger.exception("TTS playback error")
             finally:
                 if text is not None:
@@ -197,6 +202,7 @@ class TextToSpeech:
                 text,
                 voice=self._config.voice,
                 rate=self._config.rate,
+                pitch=self._config.pitch,
                 volume=self._config.volume,
             )
             await communicate.save(mp3_path)
@@ -245,6 +251,10 @@ class TextToSpeech:
     @property
     def is_speaking(self) -> bool:
         return self._speaking
+
+    @property
+    def last_error(self) -> Optional[str]:
+        return self._last_error
 
     def interrupt(self) -> None:
         self._interrupted = True
