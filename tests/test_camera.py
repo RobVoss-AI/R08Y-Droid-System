@@ -18,7 +18,7 @@ def test_camera_config_defaults():
 
 async def _test_camera_lifecycle():
     """Test camera start/stop with mocked OpenCV."""
-    config = CameraConfig(device_index=0)
+    config = CameraConfig(device_index=0, backend="opencv")
 
     mock_cap = MagicMock()
     mock_cap.isOpened.return_value = True

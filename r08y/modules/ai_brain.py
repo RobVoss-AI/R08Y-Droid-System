@@ -99,6 +99,14 @@ class AIBrain:
                 return command
         return None
 
+    def _build_system_prompt(self, context_note: str) -> str:
+        """Combine role, spoken-delivery guidance, and current visual context."""
+        return (
+            f"{self._config.system_prompt}\n\n"
+            f"[Spoken response style: {self._config.spoken_style}]\n"
+            f"[Visual context: {context_note}]"
+        )
+
     async def think(self, user_text: str, visual_context: VisualContext, user_name: str = "unknown") -> str:
         """Process user speech and generate a response.
 
@@ -141,7 +149,7 @@ class AIBrain:
             self._histories[user_name] = history
 
         # Build messages for Claude
-        system_prompt = f"{self._config.system_prompt}\n\n[Visual context: {context_note}]"
+        system_prompt = self._build_system_prompt(context_note)
         messages = [{"role": t.role, "content": t.content} for t in history]
 
         try:

@@ -85,26 +85,31 @@ class SkillManager:
             except Exception:
                 logger.exception("Failed to load skill '%s'", name)
 
-    async def setup_all(self, servo, tts, camera, state) -> None:
+    async def setup_all(
+        self, servo, tts, camera, state, mobility=None, distance=None, light_sensors=None
+    ) -> None:
         """Inject runtime context into all loaded skills and register commands."""
-        for name, skill in self._skills.items():
-            skill_config = self._config.get("skills", {}).get(name, {})
-            data_dir = str(Path("data/skills") / name)
-            os.makedirs(data_dir, exist_ok=True)
-
-            context = SkillContext(
-                event_bus=self.event_bus,
-                command_registry=self.command_registry,
-                servo=servo,
-                tts=tts,
-                camera=camera,
-                state=state,
-                config=skill_config,
-                data_dir=data_dir,
-                logger=logging.getLogger(f"r08y.skills.{name}"),
-            )
-
+        failed = []
+        for name, skill in list(self._skills.items()):
             try:
+                skill_config = self._config.get("skills", {}).get(name, {})
+                data_dir = str(Path("data/skills") / name)
+                os.makedirs(data_dir, exist_ok=True)
+
+                context = SkillContext(
+                    event_bus=self.event_bus,
+                    command_registry=self.command_registry,
+                    servo=servo,
+                    tts=tts,
+                    camera=camera,
+                    mobility=mobility,
+                    distance=distance,
+                    light_sensors=light_sensors,
+                    state=state,
+                    config=skill_config,
+                    data_dir=data_dir,
+                    logger=logging.getLogger(f"r08y.skills.{name}"),
+                )
                 await skill.setup(context)
 
                 # Register voice commands
@@ -132,15 +137,34 @@ class SkillManager:
 
             except Exception:
                 logger.exception("Failed to setup skill '%s'", name)
+                self.command_registry.unregister_skill(name)
+                failed.append(name)
+
+        for name in failed:
+            self._skills.pop(name, None)
 
     async def start_all(self) -> None:
         """Start all loaded skills."""
-        for name, skill in self._skills.items():
+        failed = []
+        for name, skill in list(self._skills.items()):
             try:
                 await skill.start()
                 logger.info("Started skill: %s", name)
             except Exception:
                 logger.exception("Failed to start skill '%s'", name)
+                self.command_registry.unregister_skill(name)
+                failed.append(name)
+
+        for name in failed:
+            skill = self._skills.pop(name, None)
+            for collection in (
+                self._vision_frame_skills,
+                self._vision_detection_skills,
+                self._voice_pre_ai_skills,
+                self._voice_post_ai_skills,
+            ):
+                if skill in collection:
+                    collection.remove(skill)
 
     async def stop_all(self) -> None:
         """Stop all loaded skills."""

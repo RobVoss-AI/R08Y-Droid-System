@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from r08y.config import ServoConfig
+from r08y.hardware.freenove import FreenoveLibrary, discover_freenove_path
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,82 @@ class MotorController(ABC):
     async def stop(self) -> None:
         """Release hardware resources."""
         ...
+
+
+class DisabledServoController(MotorController):
+    """No-op controller that accurately reports unavailable hardware."""
+
+    available = False
+
+    async def set_angle(self, channel: int, angle: float) -> None:
+        return
+
+    async def get_angle(self, channel: int) -> float:
+        return 90.0
+
+    async def home(self) -> None:
+        return
+
+    async def start(self) -> None:
+        self.available = False
+
+    async def stop(self) -> None:
+        self.available = False
+
+
+class FreenoveServoController(MotorController):
+    """Pan/tilt adapter for Freenove's official ``Servo`` class."""
+
+    def __init__(self, config: ServoConfig):
+        self._config = config
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="freenove-servo")
+        self._servo = None
+        self._angles = {config.pan_channel: config.home_pan, config.tilt_channel: config.home_tilt}
+        self.available = False
+
+    def _init_hardware(self) -> None:
+        library = FreenoveLibrary(self._config.freenove_library_path)
+        servo_class = library.load_class("servo", "Servo")
+        self._servo = servo_class()
+        self._set_angle_sync(self._config.pan_channel, self._config.home_pan)
+        self._set_angle_sync(self._config.tilt_channel, self._config.home_tilt)
+
+    def _set_angle_sync(self, channel: int, angle: float) -> None:
+        min_angle = self._config.pan_min if channel == self._config.pan_channel else self._config.tilt_min
+        max_angle = self._config.pan_max if channel == self._config.pan_channel else self._config.tilt_max
+        clamped = max(min_angle, min(max_angle, angle))
+        if self._servo is not None:
+            self._servo.set_servo_pwm(str(channel), int(round(clamped)))
+        self._angles[channel] = clamped
+
+    async def set_angle(self, channel: int, angle: float) -> None:
+        if not self.available:
+            return
+        await asyncio.get_running_loop().run_in_executor(
+            self._executor, self._set_angle_sync, channel, angle
+        )
+
+    async def get_angle(self, channel: int) -> float:
+        return self._angles.get(channel, 90.0)
+
+    async def home(self) -> None:
+        await self.set_angle(self._config.pan_channel, self._config.home_pan)
+        await self.set_angle(self._config.tilt_channel, self._config.home_tilt)
+
+    async def start(self) -> None:
+        try:
+            await asyncio.get_running_loop().run_in_executor(self._executor, self._init_hardware)
+            self.available = True
+            logger.info("Freenove pan/tilt servos initialized")
+        except Exception:
+            logger.exception("Failed to initialize Freenove pan/tilt servos")
+
+    async def stop(self) -> None:
+        if self.available:
+            await self.home()
+        self.available = False
+        self._servo = None
+        self._executor.shutdown(wait=False)
 
 
 class PCA9685ServoController(MotorController):
@@ -110,12 +187,9 @@ class PCA9685ServoController(MotorController):
 class GPIOServoController(MotorController):
     """Fallback servo control using RPi.GPIO software PWM.
 
-    Less precise than PCA9685 but works without additional hardware.
-    Default pins: GPIO 17 (pan), GPIO 18 (tilt).
+    Less precise than PCA9685 but works without additional hardware. Pins must
+    be configured explicitly; R08Y does not guess GPIO assignments.
     """
-
-    # Map channel numbers to GPIO pins
-    DEFAULT_PINS = {0: 17, 1: 18}
 
     def __init__(self, config: ServoConfig):
         self._config = config
@@ -127,10 +201,15 @@ class GPIOServoController(MotorController):
     def _init_hardware(self) -> bool:
         try:
             import RPi.GPIO as GPIO
+            if self._config.gpio_pan_pin is None or self._config.gpio_tilt_pin is None:
+                raise ValueError("GPIO servo pins are not configured")
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
-            for channel in [self._config.pan_channel, self._config.tilt_channel]:
-                pin = self.DEFAULT_PINS.get(channel, 17 + channel)
+            pins = {
+                self._config.pan_channel: self._config.gpio_pan_pin,
+                self._config.tilt_channel: self._config.gpio_tilt_pin,
+            }
+            for channel, pin in pins.items():
                 GPIO.setup(pin, GPIO.OUT)
                 pwm = GPIO.PWM(pin, 50)  # 50Hz for servos
                 pwm.start(self._angle_to_duty(90))
@@ -191,7 +270,7 @@ class MockServoController(MotorController):
     def __init__(self, config: ServoConfig):
         self._config = config
         self._angles = {config.pan_channel: config.home_pan, config.tilt_channel: config.home_tilt}
-        self.available = True
+        self.available = False
 
     async def set_angle(self, channel: int, angle: float) -> None:
         min_a = self._config.pan_min if channel == self._config.pan_channel else self._config.tilt_min
@@ -210,27 +289,35 @@ class MockServoController(MotorController):
         await self.set_angle(self._config.tilt_channel, self._config.home_tilt)
 
     async def start(self) -> None:
+        self.available = True
         logger.info("Mock servo controller active (no physical servos)")
 
     async def stop(self) -> None:
-        pass
+        self.available = False
 
 
 def create_servo_controller(config: ServoConfig) -> MotorController:
     """Factory: create the best available servo controller.
 
-    auto: tries PCA9685 → GPIO → Mock
+    auto: tries Freenove → PCA9685 → explicitly configured GPIO. It never
+    reports a mock as physical hardware unless ``driver: mock`` is selected.
     """
     if not config.enabled:
         logger.info("Servos disabled in config")
-        return MockServoController(config)
+        return DisabledServoController()
 
-    if config.driver == "pca9685":
+    if config.driver == "freenove":
+        return FreenoveServoController(config)
+    elif config.driver == "pca9685":
         return PCA9685ServoController(config)
     elif config.driver == "gpio":
         return GPIOServoController(config)
     elif config.driver == "mock":
         return MockServoController(config)
+
+    if discover_freenove_path(config.freenove_library_path):
+        logger.info("Official Freenove modules detected — using Freenove servo adapter")
+        return FreenoveServoController(config)
 
     # Auto-detect
     try:
@@ -241,12 +328,19 @@ def create_servo_controller(config: ServoConfig) -> MotorController:
     except ImportError:
         pass
 
+    if config.gpio_pan_pin is not None and config.gpio_tilt_pin is not None:
+        try:
+            import RPi.GPIO  # noqa: F401
+            logger.info("RPi.GPIO and explicit servo pins detected — using GPIO PWM")
+            return GPIOServoController(config)
+        except ImportError:
+            pass
+
     try:
         import RPi.GPIO  # noqa: F401
-        logger.info("RPi.GPIO detected — using GPIO PWM servo driver")
-        return GPIOServoController(config)
+        logger.warning("RPi.GPIO detected, but servo pins are not configured")
     except ImportError:
         pass
 
-    logger.info("No servo hardware detected — using mock controller")
-    return MockServoController(config)
+    logger.info("No servo hardware detected — servos unavailable")
+    return DisabledServoController()

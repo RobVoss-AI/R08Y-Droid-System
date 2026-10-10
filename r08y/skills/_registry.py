@@ -68,3 +68,9 @@ class CommandRegistry:
     def list_commands(self) -> List[RegisteredCommand]:
         """List all registered commands (for help/discovery)."""
         return list(self._commands)
+
+    def unregister_skill(self, skill_name: str) -> None:
+        """Remove commands owned by a skill that failed its lifecycle."""
+        self._commands = [
+            command for command in self._commands if command.skill_name != skill_name
+        ]

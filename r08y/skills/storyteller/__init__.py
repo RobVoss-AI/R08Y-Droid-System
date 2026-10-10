@@ -49,6 +49,7 @@ class Skill(BaseSkill):
         super().__init__()
         self._telling = False
         self._client = None
+        self._model = "claude-sonnet-5-5"
         self._original_rate: str = "+0%"
         self._original_volume: str = "+0%"
 
@@ -76,6 +77,7 @@ class Skill(BaseSkill):
             from r08y.config import load_config
             config = load_config()
             api_key = context.config.get("anthropic_api_key", config.ai.api_key)
+            self._model = context.config.get("model", config.ai.model)
             if api_key and not api_key.startswith("YOUR_"):
                 self._client = anthropic.AsyncAnthropic(api_key=api_key)
 
@@ -118,7 +120,7 @@ class Skill(BaseSkill):
 
         try:
             response = await self._client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self._model,
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )

@@ -11,28 +11,33 @@ from r08y.skills._base import BaseSkill, PipelineHook, SkillManifest, VoiceComma
 
 PROFILES: Dict[str, dict] = {
     "default": {
-        "voice": "en-US-GuyNeural",
-        "rate": "+0%",
+        "voice": "en-US-AndrewMultilingualNeural",
+        "rate": "+1%",
+        "pitch": "+2Hz",
         "transform": None,
     },
     "pirate": {
         "voice": "en-US-GuyNeural",
         "rate": "-10%",
+        "pitch": "+0Hz",
         "transform": "pirate",
     },
     "serious": {
         "voice": "en-US-AriaNeural",
         "rate": "-5%",
+        "pitch": "+0Hz",
         "transform": None,
     },
     "cheerful": {
         "voice": "en-US-JennyNeural",
         "rate": "+10%",
+        "pitch": "+2Hz",
         "transform": None,
     },
     "british": {
         "voice": "en-GB-RyanNeural",
         "rate": "+0%",
+        "pitch": "+0Hz",
         "transform": None,
     },
 }
@@ -69,6 +74,7 @@ class Skill(BaseSkill):
         # Update TTS config for next speech
         self.ctx.tts._config.voice = profile["voice"]
         self.ctx.tts._config.rate = profile["rate"]
+        self.ctx.tts._config.pitch = profile["pitch"]
         return f"Switched to {name} voice."
 
     async def on_voice_post_ai(self, response: str) -> str:

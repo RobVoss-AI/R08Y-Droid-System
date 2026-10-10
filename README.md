@@ -1,227 +1,171 @@
 # R08Y Droid System
 
-A Raspberry Pi 4B AI companion with facial recognition, voice interaction, servo-driven camera tracking, and a pluggable skill system. Built with a hybrid architecture — real-time vision and tracking run on-device while speech and AI use cloud APIs.
+R08Y turns a Raspberry Pi 4B and Freenove 4WD mecanum chassis into a voice-controlled AI droid with vision, face tracking, sensors, and guarded movement.
 
-```
-┌─────────────────── Raspberry Pi 4B ───────────────────┐
-│                                                        │
-│  USB Webcam ──► Camera ──► Face Detector               │
-│     (mic)         │             │                      │
-│                   │       Face Recognizer              │
-│  PyAudio ◄────────┘       (dlib encodings)             │
-│     │                          │                       │
-│  Wake Word ──► Record    Face Tracker (PID)            │
-│  (porcupine)                   │                       │
-│                          Servo Controller              │
-│                          (PCA9685 / GPIO)              │
-│                                │                       │
-│       ┌──── Skills (16 plugins) ────┐                  │
-│       │ gestures, patrol, motion,   │                  │
-│       │ weather, timer, QR, LEDs... │                  │
-│       └─────────────────────────────┘                  │
-└────────────────────────────────────────────────────────┘
-         │ Cloud APIs
-         ▼
-  Whisper STT    Claude API    edge-tts
-  (Groq/OpenAI)  (Anthropic)  (Microsoft)
-```
+## Status
 
-## Features
+In development. XVF3800 capture and speaker playback have been verified on the Pi. The software and mock-hardware suite are verified on macOS and Linux-compatible Python. Live acceptance still remains for the integrated R08Y voice turn, motor direction, and camera selection.
 
-- **Facial recognition** — Detect, learn, and recognize faces using dlib 128D encodings stored in SQLite
-- **Voice interaction** — Wake word detection (Porcupine), speech-to-text (Whisper), AI conversation (Claude), text-to-speech (Edge TTS)
-- **Camera tracking** — PID-controlled pan/tilt servos follow faces in real-time; patrol mode when idle
-- **16 pluggable skills** — Gestures, motion detection, QR scanning, weather, timers, Home Assistant, dictation, and more
-- **Graceful degradation** — Every module and skill is optional; R08Y works with whatever hardware is connected
+## Stack
 
-## Hardware
+- Python 3.11+ with `asyncio` pipelines for vision, voice, and skills
+- Official Freenove FNK0043 Python modules behind R08Y hardware adapters
+- OpenCV/Picamera2, ALSA/PyAudio, PipeWire, Porcupine, Whisper, Claude, and Edge TTS
+- SQLite for face encodings and conversation history
+- `systemd` service for Debian 13 and Raspberry Pi OS, including the user PipeWire runtime
 
-### Required (~$85)
-
-| Component | Notes |
-|-----------|-------|
-| Raspberry Pi 4B | 2GB minimum, 4GB+ recommended |
-| USB webcam | Logitech C270 or similar (includes mic) |
-| USB/3.5mm speaker | For TTS audio output |
-| 16GB+ microSD card | 32GB recommended |
-| 5V 3A USB-C power supply | Official Pi 4 PSU recommended |
-
-### Optional
-
-| Component | Purpose |
-|-----------|---------|
-| 2x SG90 servo motors + pan/tilt bracket | Camera tracking |
-| PCA9685 PWM servo board | Precise I2C servo control |
-| HC-SR04 ultrasonic sensor | Proximity detection |
-| NeoPixel/WS2812 LED ring | Status lighting and mood effects |
-| Bluetooth speaker | Wireless audio |
-
-## Quick Start
+## Local development
 
 ```bash
-# Clone the repo
 git clone https://github.com/RobVoss-AI/R08Y-Droid-System.git
 cd R08Y-Droid-System
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+cp config.example.yaml config.yaml
+.venv/bin/python -m r08y --config config.yaml --check-config
+```
 
-# Run the installer (on Pi)
+The unit tests use fakes and do not touch motors, servos, audio, or GPIO.
+
+## Deploy
+
+Target: Raspberry Pi 4B running Debian 13 or Raspberry Pi OS.
+
+```bash
 bash install.sh
-
-# Edit your config
-nano /opt/r08y/config.yaml
-
-# Test it
-cd /opt/r08y && ./venv/bin/python -m r08y
-
-# Run as a service
+cd /opt/r08y
+./venv/bin/python -m r08y --config config.yaml --smoke-test
 sudo systemctl start r08y
-sudo systemctl status r08y
 ```
 
-See [HOWTO.md](HOWTO.md) for the full build guide.
+Do not start the service until the passive smoke test passes. Follow [HOWTO.md](HOWTO.md) for the speaker-first deployment sequence and the guarded wheels-raised motor exercise.
 
-## Project Structure
+## Notes for maintainers
 
-```
-r08y/
-├── main.py                 # Orchestrator — two async pipelines + skill manager
-├── config.py               # Typed YAML config with env var overrides
-├── modules/                # Core hardware/API modules
-│   ├── camera.py           # Async OpenCV webcam capture
-│   ├── face_detector.py    # Haar cascade (fast) / DNN (accurate)
-│   ├── face_recognizer.py  # dlib face encodings + SQLite
-│   ├── face_tracker.py     # PID controller for servo tracking
-│   ├── servo_controller.py # PCA9685 → GPIO → Mock fallback chain
-│   ├── voice_input.py      # Wake word + audio recording
-│   ├── speech_to_text.py   # Whisper API (OpenAI / Groq)
-│   ├── ai_brain.py         # Claude API with conversation history
-│   ├── text_to_speech.py   # Edge TTS with speech queue
-│   └── mobility.py         # Stub for future wheel motors
-└── skills/                 # Pluggable skill system
-    ├── _base.py            # BaseSkill ABC + SkillManifest
-    ├── _bus.py             # EventBus (async pub/sub)
-    ├── _registry.py        # Voice command routing
-    ├── camera_gestures/    # Nod, shake, dance, look directions
-    ├── patrol_routes/      # Saved scan patterns
-    ├── motion_detect/      # Frame differencing security alerts
-    ├── sound_effects/      # Audio cues for events
-    ├── voice_profiles/     # Switch TTS personalities
-    ├── dictation/          # Speak-to-text-file mode
-    ├── object_detect/      # MobileNet SSD object detection
-    ├── emotion_detect/     # Facial expression reading
-    ├── photo_capture/      # Take and save photos
-    ├── qr_reader/          # QR code / barcode scanning
-    ├── system_monitor/     # CPU temp, memory, disk, uptime
-    ├── timer_alarm/        # Countdown timers with alerts
-    ├── weather/            # Open-Meteo weather forecasts
-    ├── home_assistant/     # Smart home control via HA API
-    ├── presentation/       # Timed talks with camera choreography
-    ├── storyteller/        # Dramatic stories with mood-driven delivery
-    ├── daily_briefing/     # Morning/evening weather + time summary
-    ├── greeter/            # Welcome recognized people by name
-    ├── distance_sensor/    # HC-SR04 proximity detection
-    └── led_controller/     # NeoPixel status/mood lighting
+- R08Y does not copy or guess Freenove pin and PWM mappings. It loads the official `motor.py`, `servo.py`, `ultrasonic.py`, and `adc.py` modules from the Freenove `Code/Server` directory.
+- The official Freenove `params.json` must identify the connector, controller PCB, and Pi generation before ADC light-sensor initialization. R08Y refuses to trigger the upstream interactive prompt inside the service.
+- Numeric audio indexes are unstable across reboots. Input and output default to a strict name match for `XVF3800`; R08Y will not silently speak through another sink.
+- The XVF3800 uses a name-resolved `arecord` stream at its verified native S16_LE, 16 kHz, two-channel format. Reads have a hard timeout, and R08Y downmixes to 16 kHz mono for wake word and STT processing. Other microphones retain the PyAudio fallback.
+- Startup reads an actual capture chunk. If the XVF3800 returns an immediate I/O error or no samples before the deadline, R08Y closes capture and reports the known physical USB unplug/replug recovery.
+- Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
+- `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
+- Negative `mobility.wheel_scale` values reverse individual wheels. Confirm direction only with all four wheels clear of the surface.
+- API keys belong in `/etc/r08y/r08y.env`, never in `config.yaml` or logs.
+
+## Architecture
+
+```text
+XVF3800 USB input -> wake word -> record -> Whisper STT
+                                             |
+                                             v
+Freenove sensors -> skill commands ------> Claude -> Edge TTS -> XVF3800 output
+       |                 |
+       |                 +-> guarded mecanum mobility
+       v
+camera -> face detection/recognition -> PID pan/tilt tracking
 ```
 
-## Skills
+The hardware boundary is explicit:
 
-Skills are self-contained plugins that register their own voice commands and pipeline hooks. They auto-discover at startup — adding a new skill never requires editing core code.
-
-| Skill | Voice Commands | Requires |
-|-------|---------------|----------|
-| `camera_gestures` | "nod yes", "shake no", "dance", "look left" | servos |
-| `patrol_routes` | "start patrol", "save this position" | servos |
-| `motion_detect` | "start monitoring", "any motion" | camera |
-| `sound_effects` | "beep", "happy sound", "alert sound" | — |
-| `voice_profiles` | "pirate voice", "british voice", "normal voice" | tts |
-| `dictation` | "start dictating", "stop dictating", "read it back" | tts |
-| `object_detect` | "what do you see", "count people" | camera |
-| `emotion_detect` | "how do I look", "read my expression" | camera |
-| `photo_capture` | "take a photo", "say cheese" | camera |
-| `qr_reader` | "scan QR", "last QR code" | camera |
-| `system_monitor` | "how are you feeling", "CPU temp", "uptime" | — |
-| `timer_alarm` | "set a timer for 5 minutes", "time left" | tts |
-| `weather` | "what's the weather", "temperature outside" | network |
-| `home_assistant` | "turn on the lights", "toggle the fan" | network |
-| `presentation` | "give a presentation about AI", "present for 5 minutes" | tts |
-| `storyteller` | "tell me a story", "tell a scary story", "tell a joke" | tts |
-| `daily_briefing` | "good morning", "daily briefing", "catch me up" | tts |
-| `greeter` | "greetings on/off", "greet everyone" | camera, tts |
-| `distance_sensor` | "how far", "start proximity alert" | gpio |
-| `led_controller` | "set color red", "lights off", "brightness 50" | gpio |
-
-### Creating a Custom Skill
-
-Create `r08y/skills/my_skill/__init__.py`:
-
-```python
-from r08y.skills._base import BaseSkill, SkillManifest, VoiceCommand
-
-class Skill(BaseSkill):
-    @property
-    def manifest(self):
-        return SkillManifest(
-            name="my_skill",
-            description="Does something cool",
-            commands=[
-                VoiceCommand(triggers=["do the thing"], handler="cmd_do_it"),
-            ],
-        )
-
-    async def cmd_do_it(self, text, user_name):
-        return "Done!"
+```text
+r08y/hardware/freenove.py        verifies and loads official kit modules
+r08y/modules/servo_controller.py Freenove pan/tilt or explicit GPIO adapter
+r08y/modules/sensors.py          ultrasonic and light-sensor adapters
+r08y/modules/mobility.py         mecanum mixing, clearance guard, watchdog
+r08y/modules/audio_devices.py    named ALSA capture, PortAudio fallback, and PipeWire routing
+r08y/modules/health.py           runtime component health report
+r08y/diagnostics.py              passive and opt-in Pi smoke tests
 ```
 
-That's it. R08Y discovers and loads it automatically on next startup.
+See [docs/HARDWARE_MAP.md](docs/HARDWARE_MAP.md) for the full reuse, modify, and add decision record.
+
+## Runtime behavior
+
+R08Y runs two main pipelines:
+
+```text
+Vision: camera -> detection -> tracking -> recognition -> vision skill hooks
+Voice:  wake word -> capture -> STT -> command skill or Claude -> TTS
+```
+
+Skills discover themselves from `r08y/skills/*/__init__.py`. Hardware-dependent skills load only when their required adapter reports available. A failed skill setup or startup is removed from command routing instead of remaining partly active.
+
+New chassis commands include:
+
+- “move forward,” “move backward,” and “back up”
+- “strafe left” and “strafe right”
+- “turn left” and “turn right”
+- “stop wheels” and “emergency stop”
+- “show your moves”
+- “how far,” “check light sensors,” and “hardware status”
+
+Movement is short and speed-limited. Spoken forward commands are rejected when the ultrasonic sensor is unavailable, returns no reading, or sees an obstacle inside the configured stop distance.
 
 ## Configuration
 
-Copy `config.example.yaml` to `config.yaml` and fill in your API keys:
+Copy `config.example.yaml` to `config.yaml`. Put secrets in the environment file created by the installer:
 
-```yaml
-ai:
-  api_key: YOUR_ANTHROPIC_KEY_HERE    # or set R08Y_ANTHROPIC_API_KEY env var
-
-stt:
-  provider: groq                       # "groq" (free tier) or "openai"
-  groq_api_key: YOUR_GROQ_KEY_HERE    # or set R08Y_GROQ_API_KEY env var
-
-wake_word:
-  porcupine_access_key: YOUR_KEY      # or set R08Y_PICOVOICE_KEY env var
+```text
+R08Y_ANTHROPIC_API_KEY=
+R08Y_GROQ_API_KEY=
+R08Y_OPENAI_API_KEY=
+R08Y_PICOVOICE_KEY=
+R08Y_FREENOVE_PATH=
 ```
 
-All API keys can also be set via environment variables (see `config.example.yaml`).
+The minimum conversational path uses Anthropic, Groq or OpenAI for transcription, Picovoice for the wake word, and Edge TTS for speech. Weather uses Open-Meteo without an API key.
 
-## API Keys Needed
+The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/models/overview) and [`whisper-large-v3`](https://console.groq.com/docs/model/whisper-large-v3). Both identifiers were checked against their providers’ model documentation on October 4, 2026.
 
-| Service | Purpose | Free Tier |
-|---------|---------|-----------|
-| [Anthropic](https://console.anthropic.com/) | Claude AI conversation | Pay-per-use |
-| [Groq](https://console.groq.com/) | Whisper speech-to-text | Yes, generous |
-| [Picovoice](https://console.picovoice.ai/) | Wake word detection | Yes, 3 keywords |
-| Edge TTS | Text-to-speech | Free (no key needed) |
-| [Open-Meteo](https://open-meteo.com/) | Weather data | Free (no key needed) |
+## Verification commands
 
-## How It Works
+```bash
+# Desktop-safe tests
+.venv/bin/python -m pytest -q
 
-R08Y runs two concurrent async pipelines:
+# Configuration only; no hardware access
+./venv/bin/python -m r08y --config config.yaml --check-config
 
-**Vision Pipeline** (continuous, ~15 FPS):
+# Passive Pi discovery; no motors, servo movement, camera, or audio playback
+./venv/bin/python -m r08y --config config.yaml --smoke-test
+
+# Guided two-second microphone sample and speaker tone; no other hardware
+./venv/bin/python -m r08y --config config.yaml --audio-test
+
+# Speak a fixed sentence with the configured voice, rate, pitch, and volume
+./venv/bin/python -m r08y --config config.yaml --speech-test
+
+# Audition a voice without changing config.yaml
+./venv/bin/python -m r08y --config config.yaml --speech-test \
+  --speech-voice en-US-AndrewMultilingualNeural \
+  --speech-rate=+1% --speech-pitch=+2Hz
+
+# Camera, pan/tilt home, sensors, microphone, and speaker tone
+./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware
+
+# Adds six low-speed movement patterns. Raise every wheel first.
+./venv/bin/python -m r08y --config config.yaml --smoke-test \
+  --exercise-hardware --exercise-mobility --confirm-wheels-raised
 ```
-camera → face detection → servo tracking → face recognition (throttled)
-                        → skill hooks (motion detect, QR reader, etc.)
+
+The program exits nonzero when a required smoke-test check fails. `--json` produces machine-readable results.
+
+## Project structure
+
+```text
+r08y/
+├── main.py                 runtime orchestration and graceful shutdown
+├── config.py               typed YAML configuration and validation
+├── diagnostics.py          Pi smoke-test command path
+├── hardware/               official Freenove runtime bridge
+├── modules/                vision, voice, AI, sensors, motion, and health
+└── skills/                 auto-discovered command and pipeline plugins
+tests/                      mock/fake unit and integration-boundary tests
+docs/HARDWARE_MAP.md        reuse/modify/add hardware decision record
+HOWTO.md                    exact Pi deployment and acceptance procedure
 ```
 
-**Voice Pipeline** (event-driven):
-```
-wake word → record speech → STT → skill commands → Claude AI → TTS → speak
-```
+## Third-party hardware source
 
-Pipelines share state through `DroidState` — the voice pipeline knows who the droid is looking at, and can include visual context in conversations with Claude.
-
-## License
-
-MIT
-
-## Credits
-
-Inspired by [meckie.ai](https://meckie.ai/). Built by Rob Voss with Claude Code.
+The chassis adapter targets Freenove’s official [4WD Smart Car Kit for Raspberry Pi repository](https://github.com/Freenove/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi). That upstream project owns its board-specific mappings and retains its own license.

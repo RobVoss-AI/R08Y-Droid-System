@@ -33,6 +33,7 @@ async def _test_mock_servo():
     assert await servo.get_angle(1) == 90
 
     await servo.stop()
+    assert not servo.available
 
 
 def test_mock_servo():

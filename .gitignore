@@ -1,28 +1,19 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
+node_modules/
 dist/
 build/
-*.egg
-venv/
-.venv/
-
-# Config with secrets
-config.yaml
-
-# Runtime data
-data/*.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
+.env
+.env.local
+.env.*.local
+*.log
 .DS_Store
-Thumbs.db
-
-# Claude
-.claude/
+.vercel
+.netlify
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+config.yaml
+data/

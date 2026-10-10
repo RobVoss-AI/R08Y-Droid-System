@@ -1,119 +1,180 @@
-# R08Y Droid System Configuration
-# Copy this file to config.yaml and fill in your API keys.
+# R08Y configuration for the Freenove Pi 4B + XVF3800 build.
+# Copy to config.yaml. Keep API keys in /etc/r08y/r08y.env or your shell.
+
+freenove:
+  # Directory containing the official motor.py, servo.py, ultrasonic.py, and adc.py.
+  # Leave null to search the official clone under the service user's home directory.
+  library_path: null
+  auto_discover: true
 
 camera:
-  device_index: 0        # USB webcam device index
+  enabled: true
+  backend: auto            # auto tries Picamera2, then OpenCV/V4L2
+  device_index: 0
+  device_path: null         # Set /dev/videoN only after confirming it on the Pi
   width: 640
   height: 480
   fps: 30
+  horizontal_flip: false
+  vertical_flip: false
 
 face_detection:
-  method: haar           # "haar" (fast) or "dnn" (accurate)
-  scale_factor: 1.3      # Haar cascade scale factor
-  min_neighbors: 5       # Haar cascade min neighbors
-  detection_width: 320   # Downscale width for detection performance
-  confidence_threshold: 0.5  # DNN confidence threshold
+  method: haar
+  scale_factor: 1.3
+  min_neighbors: 5
+  detection_width: 320
+  confidence_threshold: 0.5
 
 face_recognition:
   db_path: data/faces.db
-  tolerance: 0.6         # Lower = stricter matching (0.0-1.0)
+  tolerance: 0.6
   max_encodings_per_person: 5
-  cache_ttl_seconds: 5   # Reuse recent recognition result within TTL
+  cache_ttl_seconds: 5
 
 servos:
   enabled: true
-  driver: auto           # "pca9685", "gpio", "mock", or "auto" (auto-detect)
+  driver: freenove         # Uses the official Freenove Servo adapter
+  freenove_library_path: null
   i2c_address: 0x40
   pan_channel: 0
   tilt_channel: 1
+  gpio_pan_pin: null       # Only used by explicit driver: gpio
+  gpio_tilt_pin: null
   pan_min: 30
   pan_max: 150
   tilt_min: 30
   tilt_max: 150
   home_pan: 90
   home_tilt: 90
-  speed: 120             # Degrees per second for smooth movement
+  speed: 120
 
 tracker:
   pid_kp: 0.05
   pid_ki: 0.01
   pid_kd: 0.02
-  dead_zone: 0.05        # Fraction of frame to ignore (prevents jitter)
-  patrol_speed: 30       # Degrees per second during patrol scan
-  no_face_timeout: 5.0   # Seconds before switching to patrol mode
+  dead_zone: 0.05
+  patrol_speed: 30
+  no_face_timeout: 5.0
 
 audio:
-  sample_rate: 16000
+  sample_rate: 16000       # Processing format used by wake word and STT
   channels: 1
   chunk_size: 512
-  device_index: null     # null = auto-detect USB mic
-  rms_threshold: 500     # Silence detection threshold
-  silence_duration: 1.5  # Seconds of silence before ending recording
+  device_index: null       # Avoid volatile numeric indexes when possible
+  device_name: XVF3800
+  require_device_match: true
+  capture_backend: auto    # XVF3800 uses bounded arecord; other mics retain PyAudio
+  hardware_sample_rate: 16000  # XVF3800 native capture format: S16_LE/16 kHz/stereo
+  hardware_channels: 2        # Downmixed to processing channels before wake word/STT
+  rms_threshold: 500
+  silence_duration: 1.5
   max_record_seconds: 30
 
 wake_word:
-  engine: porcupine      # "porcupine" or "rms" (simple noise trigger)
-  porcupine_access_key: YOUR_PICOVOICE_KEY_HERE
-  keyword_path: null     # Path to custom .ppn file, or null for built-in
-  sensitivity: 0.5       # Wake word sensitivity (0.0-1.0)
+  engine: porcupine
+  porcupine_access_key: ""
+  keyword_path: null
+  sensitivity: 0.5
 
 stt:
-  provider: groq         # "openai" or "groq"
-  openai_api_key: YOUR_OPENAI_KEY_HERE
-  groq_api_key: YOUR_GROQ_KEY_HERE
+  provider: groq
+  openai_api_key: ""
+  groq_api_key: ""
   model: whisper-large-v3
   language: en
 
 ai:
-  api_key: YOUR_ANTHROPIC_KEY_HERE
-  model: claude-sonnet-4-20250514
+  api_key: ""
+  model: claude-sonnet-5-5
   max_history_turns: 20
   system_prompt: |
-    You are R08Y, a friendly and helpful droid assistant. You have a physical
-    body with a camera and can see the people you talk to. You recognize faces
-    and remember conversations. Keep responses conversational and concise —
-    you're speaking out loud, not writing an essay.
+    You are R08Y, a friendly and capable physical droid. You can see through
+    a camera, recognize people, measure distance, report light levels, and
+    move on mecanum wheels when a registered skill handles the request. Keep
+    spoken responses concise. Never claim a physical action succeeded unless
+    the hardware layer confirmed it.
+  spoken_style: |
+    Speak with calm warmth and a lightly playful droid personality. Use natural
+    contractions and plain spoken language. Keep most replies to one or two
+    short sentences and under 30 words when practical. Help first, then add at
+    most one understated witty aside when it fits. Avoid filler, monologues,
+    sarcasm, and theatrical robot catchphrases.
   conversations_db_path: data/conversations.db
 
 tts:
-  voice: en-US-GuyNeural  # Microsoft Edge TTS voice
-  rate: "+0%"             # Speech rate adjustment
-  volume: "+0%"           # Volume adjustment
-  playback_command: aplay  # "aplay" (ALSA) or "mpv"
+  voice: en-US-AndrewMultilingualNeural
+  rate: "+1%"
+  pitch: "+2Hz"
+  volume: "+0%"
+  playback_command: pw-play   # Targets the XVF3800 PipeWire sink by discovered ID
+  output_device_name: XVF3800
+  output_target: null
+  set_pipewire_default: true
+  require_output_device_match: true
+
+distance:
+  enabled: true
+  driver: freenove
+  freenove_library_path: null
+  trigger_pin: null         # Never needed by the Freenove adapter
+  echo_pin: null
+  max_distance_m: 3.0
+  timeout_seconds: 0.2
+
+light_sensors:
+  enabled: true
+  driver: freenove
+  freenove_library_path: null
+  left_channel: 0
+  right_channel: 1
+
+mobility:
+  enabled: true
+  driver: freenove
+  freenove_library_path: null
+  max_duty: 2200
+  default_speed: 0.45
+  default_duration: 0.6
+  max_duration: 2.0
+  command_timeout: 2.5
+  obstacle_stop_cm: 30.0
+  require_distance_for_forward: true
+  wheel_scale: [1.0, 1.0, 1.0, 1.0]
+
+power:
+  ups_enabled: false        # Keep false until the UPS HAT is physically integrated
+  ups_model: null
 
 logging:
-  level: INFO             # DEBUG, INFO, WARNING, ERROR
-  file: null              # Log file path, or null for stdout only
-
-# ── Skills Configuration ──────────────────────────────────────────
-# Each skill can be disabled globally or configured individually.
-# Skills auto-discover from r08y/skills/ — no code changes needed.
+  level: INFO
+  file: null
 
 skills:
-  disabled: []            # List skill names to disable, e.g. ["led_controller", "home_assistant"]
+  disabled: []
 
-  # Weather (uses free Open-Meteo API — no key needed)
   weather:
-    latitude: 37.7749
-    longitude: -122.4194
-    location_name: San Francisco
+    latitude: 40.3461
+    longitude: -94.8725
+    location_name: Maryville, Missouri
 
-  # Home Assistant integration
+  daily_briefing:
+    latitude: 40.3461
+    longitude: -94.8725
+    location_name: Maryville, Missouri
+
   home_assistant:
     url: http://homeassistant.local:8123
-    token: YOUR_HA_TOKEN_HERE
-    entities:               # Map friendly names → HA entity IDs
-      lights: light.living_room
-      bedroom light: light.bedroom
-      fan: switch.fan
+    token: ""
+    entities: {}
 
-  # Distance sensor (HC-SR04)
   distance_sensor:
-    trig_pin: 23
-    echo_pin: 24
-    approach_threshold: 50  # cm
+    approach_threshold: 50
 
-  # LED controller (NeoPixel / WS2812)
+  mobility_control:
+    speed: 0.45
+    duration: 0.6
+    max_duration: 2.0
+
   led_controller:
     num_pixels: 12
-    brightness: 30          # 1-100
+    brightness: 0.3

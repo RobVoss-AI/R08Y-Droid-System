@@ -13,9 +13,9 @@ import logging
 import signal
 import sys
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from r08y.config import load_config, R08YConfig
+from r08y.config import load_config, validate_config, R08YConfig
 from r08y.modules.camera import CameraCapture
 from r08y.modules.face_detector import FaceDetection, create_face_detector
 from r08y.modules.face_recognizer import FaceRecognizer, RecognitionResult
@@ -25,6 +25,9 @@ from r08y.modules.voice_input import VoiceInput
 from r08y.modules.speech_to_text import create_stt_provider
 from r08y.modules.ai_brain import AIBrain, VisualContext
 from r08y.modules.text_to_speech import TextToSpeech
+from r08y.modules.sensors import create_distance_sensor, create_light_sensors
+from r08y.modules.mobility import create_mobility_controller
+from r08y.modules.health import collect_runtime_health
 from r08y.skills import SkillManager
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,7 @@ class DroidState:
     recognized: Optional[RecognitionResult] = None
     is_speaking: bool = False
     is_listening: bool = False
+    hardware_status: Dict[str, dict] = field(default_factory=dict)
 
 
 def setup_logging(config: R08YConfig) -> None:
@@ -65,6 +69,7 @@ async def vision_pipeline(
     """Continuous vision loop: detect faces, track with servos, recognize."""
     if not camera.available:
         logger.warning("Camera not available — vision pipeline disabled")
+        await shutdown.wait()
         return
 
     recognition_interval = 2.0  # Run expensive recognition every N seconds
@@ -119,6 +124,7 @@ async def voice_pipeline(
     brain: AIBrain,
     tts: TextToSpeech,
     face_recognizer: FaceRecognizer,
+    camera: CameraCapture,
     state: DroidState,
     shutdown: asyncio.Event,
     skill_manager: Optional[SkillManager] = None,
@@ -126,6 +132,7 @@ async def voice_pipeline(
     """Event-driven voice loop: wake → record → transcribe → think → speak."""
     if not voice_input.available:
         logger.warning("Voice input not available — voice pipeline disabled")
+        await shutdown.wait()
         return
 
     logger.info("Voice pipeline started — listening for wake word")
@@ -183,7 +190,7 @@ async def voice_pipeline(
         command = brain.check_special_command(text)
         if command:
             await _handle_special_command(
-                command, text, face_recognizer, tts, state, camera_ref_holder,
+                command, text, face_recognizer, tts, state, camera,
             )
             continue
 
@@ -271,113 +278,223 @@ def _extract_name(text: str) -> Optional[str]:
     return None
 
 
+async def _stop_runtime(
+    *,
+    skill_manager,
+    camera,
+    servo,
+    mobility,
+    distance,
+    light_sensors,
+    face_recognizer,
+    voice_input,
+    brain,
+    tts,
+) -> None:
+    """Stop every component even when startup or one cleanup step fails."""
+    logger.info("Shutting down...")
+    try:
+        await mobility.emergency_stop()
+    except Exception:
+        logger.exception("Emergency motor stop failed during shutdown")
+    if skill_manager is not None:
+        await skill_manager.stop_all()
+    results = await asyncio.gather(
+        camera.stop(),
+        servo.stop(),
+        mobility.stop(),
+        distance.stop(),
+        light_sensors.stop(),
+        face_recognizer.stop(),
+        voice_input.stop(),
+        brain.stop(),
+        tts.stop(),
+        return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.error(
+                "Component shutdown failed",
+                exc_info=(type(result), result, result.__traceback__),
+            )
+    logger.info("R08Y offline. Goodbye!")
+
+
 async def run(config_path: str = "config.yaml") -> None:
-    """Main entry point: initialize all modules and run the droid."""
+    """Initialize, run, and always safely stop the droid."""
     config = load_config(config_path)
+    config_errors = validate_config(config)
+    if config_errors:
+        raise ValueError("Invalid configuration: " + "; ".join(config_errors))
     setup_logging(config)
+    logger.info("R08Y Droid System v0.2.0 starting up...")
 
-    logger.info("R08Y Droid System v0.1.0 starting up...")
-
-    # Initialize all modules
     camera = CameraCapture(config.camera)
     face_detector = create_face_detector(config.face_detection)
     face_recognizer = FaceRecognizer(config.face_recognition)
     servo = create_servo_controller(config.servos)
-    face_tracker = FaceTracker(servo, config.servos, config.tracker, config.camera.width, config.camera.height)
+    face_tracker = FaceTracker(
+        servo, config.servos, config.tracker, config.camera.width, config.camera.height
+    )
     voice_input = VoiceInput(config.audio, config.wake_word)
     stt = create_stt_provider(config.stt)
     brain = AIBrain(config.ai)
     tts = TextToSpeech(config.tts)
+    distance = create_distance_sensor(config.distance)
+    light_sensors = create_light_sensors(config.light_sensors)
+    mobility = create_mobility_controller(config.mobility, distance)
 
     state = DroidState()
     shutdown = asyncio.Event()
+    skill_manager: Optional[SkillManager] = None
+    runtime_tasks: List[asyncio.Task] = []
 
-    # Graceful shutdown on SIGTERM/SIGINT
-    def _signal_handler():
+    def _signal_handler() -> None:
         logger.info("Shutdown signal received")
         shutdown.set()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, _signal_handler)
+        try:
+            loop.add_signal_handler(sig, _signal_handler)
+        except NotImplementedError:
+            pass
 
-    # Start all core modules
-    logger.info("Initializing modules...")
-    await asyncio.gather(
-        camera.start(),
-        servo.start(),
-        face_recognizer.start(),
-        voice_input.start(),
-        brain.start(),
-        tts.start(),
-    )
-
-    # Store camera ref for special commands
-    global camera_ref_holder
-    camera_ref_holder = camera
-
-    # Load and start skills
-    import yaml
-    raw_config = {}
-    from pathlib import Path
-    config_file = Path(config_path)
-    if config_file.exists():
-        with open(config_file) as f:
-            raw_config = yaml.safe_load(f) or {}
-
-    available_hw = set()
-    if camera.available:
-        available_hw.add("camera")
-    if servo.available:
-        available_hw.add("servos")
-    if voice_input.available:
-        available_hw.add("microphone")
-    if tts.available:
-        available_hw.add("tts")
-    available_hw.add("network")  # assume network if we got this far
-
-    skill_manager = SkillManager(raw_config)
-    skill_manager.load_skills(available_hw)
-    await skill_manager.setup_all(servo, tts, camera, state)
-    await skill_manager.start_all()
-
-    loaded = skill_manager.loaded_skills
-    logger.info("All modules initialized — R08Y is online! (%d skills loaded)", len(loaded))
-
-    # Speak startup greeting
-    if tts.available:
-        await tts.speak("R08Y online. Ready when you are.")
-
-    # Run pipelines concurrently
     try:
+        logger.info("Initializing modules...")
+        # The upstream ADC reads params.json relative to its source directory.
+        # Complete that sequentially before any other background work starts.
+        await light_sensors.start()
         await asyncio.gather(
-            vision_pipeline(camera, face_detector, face_recognizer, face_tracker, state, shutdown, skill_manager),
-            voice_pipeline(voice_input, stt, brain, tts, face_recognizer, state, shutdown, skill_manager),
-            _shutdown_waiter(shutdown),
+            camera.start(),
+            servo.start(),
+            face_recognizer.start(),
+            voice_input.start(),
+            brain.start(),
+            tts.start(),
+            distance.start(),
         )
-    except Exception:
-        logger.exception("Fatal error in pipeline")
+        # The forward obstacle guard must initialize before the motors do.
+        await mobility.start()
+
+        health = await collect_runtime_health(
+            config,
+            camera=camera,
+            servo=servo,
+            voice_input=voice_input,
+            tts=tts,
+            distance=distance,
+            light_sensors=light_sensors,
+            mobility=mobility,
+        )
+        state.hardware_status = health.as_dict()
+        logger.info("Hardware health: %s", health.summary())
+        for component_name, component in health.components.items():
+            if component.status == "fail":
+                logger.error("Hardware check failed: %s: %s", component_name, component.detail)
+            elif component.status == "warn":
+                logger.warning("Hardware check warning: %s: %s", component_name, component.detail)
+
+        import yaml
+        from pathlib import Path
+
+        raw_config = {}
+        config_file = Path(config_path)
+        if config_file.exists():
+            with open(config_file) as config_stream:
+                raw_config = yaml.safe_load(config_stream) or {}
+
+        available_hw = set()
+        for available, name in (
+            (camera.available, "camera"),
+            (servo.available, "servos"),
+            (voice_input.available, "microphone"),
+            (tts.available, "tts"),
+            (tts.playback_available, "speaker"),
+            (distance.available, "distance"),
+            (light_sensors.available, "light_sensors"),
+            (mobility.available, "mobility"),
+            (health.components["network"].status == "pass", "network"),
+        ):
+            if available:
+                available_hw.add(name)
+
+        skill_manager = SkillManager(raw_config)
+        skill_manager.load_skills(available_hw)
+        await skill_manager.setup_all(
+            servo,
+            tts,
+            camera,
+            state,
+            mobility=mobility,
+            distance=distance,
+            light_sensors=light_sensors,
+        )
+        await skill_manager.start_all()
+        logger.info(
+            "All modules initialized — R08Y is online! (%d skills loaded)",
+            len(skill_manager.loaded_skills),
+        )
+
+        if tts.available:
+            if voice_input.requires_usb_reseat:
+                await tts.speak(
+                    "R08Y is online, but microphone capture failed. "
+                    "Unplug and reconnect my microphone USB cable."
+                )
+            else:
+                await tts.speak("R08Y online. Ready when you are.")
+
+        vision_task = asyncio.create_task(
+            vision_pipeline(
+                camera,
+                face_detector,
+                face_recognizer,
+                face_tracker,
+                state,
+                shutdown,
+                skill_manager,
+            )
+        )
+        voice_task = asyncio.create_task(
+            voice_pipeline(
+                voice_input,
+                stt,
+                brain,
+                tts,
+                face_recognizer,
+                camera,
+                state,
+                shutdown,
+                skill_manager,
+            )
+        )
+        shutdown_task = asyncio.create_task(shutdown.wait())
+        runtime_tasks = [vision_task, voice_task, shutdown_task]
+
+        done, _ = await asyncio.wait(runtime_tasks, return_when=asyncio.FIRST_COMPLETED)
+        if shutdown_task not in done:
+            for task in done:
+                exception = task.exception()
+                if exception is not None:
+                    raise exception
+            raise RuntimeError("A runtime pipeline ended unexpectedly")
     finally:
-        # Graceful shutdown
-        logger.info("Shutting down...")
-        await skill_manager.stop_all()
-        await asyncio.gather(
-            camera.stop(),
-            servo.stop(),
-            face_recognizer.stop(),
-            voice_input.stop(),
-            brain.stop(),
-            tts.stop(),
+        shutdown.set()
+        for task in runtime_tasks:
+            if not task.done():
+                task.cancel()
+        if runtime_tasks:
+            await asyncio.gather(*runtime_tasks, return_exceptions=True)
+        await _stop_runtime(
+            skill_manager=skill_manager,
+            camera=camera,
+            servo=servo,
+            mobility=mobility,
+            distance=distance,
+            light_sensors=light_sensors,
+            face_recognizer=face_recognizer,
+            voice_input=voice_input,
+            brain=brain,
+            tts=tts,
         )
-        logger.info("R08Y offline. Goodbye!")
-
-
-async def _shutdown_waiter(shutdown: asyncio.Event) -> None:
-    """Wait for shutdown signal, then let pipelines drain."""
-    await shutdown.wait()
-    # Give pipelines a moment to finish current work
-    await asyncio.sleep(0.5)
-
-
-# Module-level reference for special commands to access camera
-camera_ref_holder: Optional[CameraCapture] = None

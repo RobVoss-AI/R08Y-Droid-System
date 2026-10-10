@@ -1,115 +1,107 @@
-#!/bin/bash
-# R08Y Droid System — Raspberry Pi Setup Script
-# Run: bash install.sh
-#
-# Prerequisites: Raspberry Pi OS Lite (64-bit) on Pi 4B
-# This script installs all system dependencies, creates a Python venv,
-# compiles dlib with NEON optimizations, and sets up systemd service.
+#!/usr/bin/env bash
+# Install R08Y on Raspberry Pi OS or Debian 13 for Raspberry Pi.
 
-set -e
+set -Eeuo pipefail
 
 INSTALL_DIR="/opt/r08y"
-VENV_DIR="$INSTALL_DIR/venv"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SERVICE_ENV_DIR="/etc/r08y"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+R08Y_USER="${SUDO_USER:-${USER}}"
+R08Y_GROUP="$(id -gn "${R08Y_USER}")"
+R08Y_UID="$(id -u "${R08Y_USER}")"
+R08Y_HOME="$(getent passwd "${R08Y_USER}" | cut -d: -f6)"
 
-echo "=== R08Y Droid System Installer ==="
-echo ""
+echo "R08Y installer"
+echo "Install user: ${R08Y_USER}"
 
-# Check we're on a Pi
-if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
-    echo "WARNING: This doesn't appear to be a Raspberry Pi."
-    echo "Continuing anyway (some hardware features won't work)."
-    echo ""
+if [[ ! -r /proc/device-tree/model ]] || ! tr -d '\0' </proc/device-tree/model | grep -qi "Raspberry Pi"; then
+    echo "WARNING: Raspberry Pi hardware was not detected."
 fi
 
-# Enable I2C for PCA9685 servo board
-echo "[1/7] Enabling I2C..."
-if command -v raspi-config &> /dev/null; then
-    sudo raspi-config nonint do_i2c 0
-    echo "  I2C enabled"
-else
-    echo "  raspi-config not found — skip I2C setup (enable manually)"
-fi
-
-# Install system dependencies
-echo "[2/7] Installing system packages..."
-sudo apt-get update -qq
-sudo apt-get install -y -qq \
+echo "[1/6] Installing system packages"
+sudo apt-get update
+sudo apt-get install -y \
     python3-pip python3-venv python3-dev \
-    cmake build-essential \
-    libatlas-base-dev libopenblas-dev \
-    libhdf5-dev libhdf5-serial-dev \
-    libjpeg-dev libpng-dev libtiff-dev \
-    portaudio19-dev \
-    ffmpeg \
-    mpv \
-    alsa-utils \
-    i2c-tools \
-    git
+    python3-opencv python3-pyaudio python3-smbus python3-gpiozero \
+    libopenblas-dev portaudio19-dev \
+    ffmpeg mpv alsa-utils i2c-tools pipewire-bin wireplumber git
 
-# Increase swap for dlib compilation
-echo "[3/7] Configuring swap for dlib compilation..."
-ORIGINAL_SWAP=$(grep CONF_SWAPSIZE /etc/dphys-swapfile 2>/dev/null | cut -d= -f2 || echo "100")
-if [ -f /etc/dphys-swapfile ]; then
-    sudo sed -i "s/CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/" /etc/dphys-swapfile
-    sudo systemctl restart dphys-swapfile
-    echo "  Swap increased to 2GB"
+for optional_package in python3-picamera2 python3-dlib; do
+    if apt-cache show "${optional_package}" >/dev/null 2>&1; then
+        sudo apt-get install -y "${optional_package}"
+    else
+        echo "Optional package unavailable: ${optional_package}"
+    fi
+done
+
+echo "[2/6] Creating the runtime environment"
+sudo install -d -o "${R08Y_USER}" -g "${R08Y_GROUP}" "${INSTALL_DIR}" "${INSTALL_DIR}/data"
+if [[ ! -d "${INSTALL_DIR}/venv" ]]; then
+    sudo -u "${R08Y_USER}" python3 -m venv --system-site-packages "${INSTALL_DIR}/venv"
+fi
+sudo -u "${R08Y_USER}" "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip wheel setuptools
+sudo -u "${R08Y_USER}" "${INSTALL_DIR}/venv/bin/pip" install -r "${SCRIPT_DIR}/requirements.txt"
+
+if "${INSTALL_DIR}/venv/bin/python" -c "import dlib" >/dev/null 2>&1; then
+    sudo -u "${R08Y_USER}" "${INSTALL_DIR}/venv/bin/pip" install face_recognition
+else
+    echo "WARNING: dlib is unavailable. Face recognition will be disabled; face tracking still works."
 fi
 
-# Create install directory and venv
-echo "[4/7] Creating virtual environment..."
-sudo mkdir -p "$INSTALL_DIR/data"
-sudo chown -R "$USER:$USER" "$INSTALL_DIR"
-python3 -m venv "$VENV_DIR"
-source "$VENV_DIR/bin/activate"
+echo "[3/6] Copying R08Y"
+sudo rm -rf "${INSTALL_DIR}/r08y"
+sudo cp -R "${SCRIPT_DIR}/r08y" "${INSTALL_DIR}/r08y"
+sudo cp "${SCRIPT_DIR}/requirements.txt" "${INSTALL_DIR}/requirements.txt"
+sudo chown -R "${R08Y_USER}:${R08Y_GROUP}" "${INSTALL_DIR}"
 
-# Install Python dependencies
-echo "[5/7] Installing Python packages (this may take a while)..."
-pip install --upgrade pip wheel setuptools
-pip install numpy pyyaml aiosqlite
-pip install opencv-python-headless pyaudio
-pip install pvporcupine anthropic openai groq edge-tts
-pip install adafruit-circuitpython-servokit adafruit-circuitpython-pca9685
-
-# dlib + face_recognition (this is the slow one)
-echo "[6/7] Compiling dlib with NEON optimizations (may take 30-60 minutes)..."
-pip install dlib --no-cache-dir
-pip install face_recognition
-
-# Restore swap
-if [ -f /etc/dphys-swapfile ]; then
-    sudo sed -i "s/CONF_SWAPSIZE=.*/CONF_SWAPSIZE=$ORIGINAL_SWAP/" /etc/dphys-swapfile
-    sudo systemctl restart dphys-swapfile
-    echo "  Swap restored to ${ORIGINAL_SWAP}MB"
+if [[ ! -f "${INSTALL_DIR}/config.yaml" ]]; then
+    sudo install -o "${R08Y_USER}" -g "${R08Y_GROUP}" -m 640 \
+        "${SCRIPT_DIR}/config.example.yaml" "${INSTALL_DIR}/config.yaml"
 fi
 
-# Copy project files
-echo "[7/7] Installing R08Y..."
-cp -r "$SCRIPT_DIR/r08y" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
-
-# Create config from example if it doesn't exist
-if [ ! -f "$INSTALL_DIR/config.yaml" ]; then
-    cp "$SCRIPT_DIR/config.example.yaml" "$INSTALL_DIR/config.yaml"
-    echo "  Created config.yaml — edit it to add your API keys!"
+echo "[4/6] Preparing environment variables"
+sudo install -d -o root -g "${R08Y_GROUP}" -m 750 "${SERVICE_ENV_DIR}"
+if [[ ! -f "${SERVICE_ENV_DIR}/r08y.env" ]]; then
+    sudo install -o root -g "${R08Y_GROUP}" -m 640 \
+        "${SCRIPT_DIR}/.env.example" "${SERVICE_ENV_DIR}/r08y.env"
 fi
 
-# Install systemd service
-sudo cp "$SCRIPT_DIR/r08y.service" /etc/systemd/system/
+echo "[5/6] Installing the system service"
+service_temp="$(mktemp)"
+trap 'rm -f "${service_temp}"' EXIT
+sed \
+    -e "s|@R08Y_USER@|${R08Y_USER}|g" \
+    -e "s|@R08Y_GROUP@|${R08Y_GROUP}|g" \
+    -e "s|@R08Y_UID@|${R08Y_UID}|g" \
+    -e "s|@R08Y_INSTALL_DIR@|${INSTALL_DIR}|g" \
+    "${SCRIPT_DIR}/r08y.service" >"${service_temp}"
+sudo install -m 644 "${service_temp}" /etc/systemd/system/r08y.service
 sudo systemctl daemon-reload
-sudo systemctl enable r08y
+sudo loginctl enable-linger "${R08Y_USER}"
+sudo systemctl enable r08y.service
 
-echo ""
-echo "=== Installation Complete ==="
-echo ""
-echo "Next steps:"
-echo "  1. Edit $INSTALL_DIR/config.yaml with your API keys"
-echo "  2. Test: cd $INSTALL_DIR && $VENV_DIR/bin/python -m r08y"
-echo "  3. Run as service: sudo systemctl start r08y"
-echo "  4. View logs: journalctl -u r08y -f"
-echo ""
-echo "Hardware checklist:"
-echo "  - USB webcam connected"
-echo "  - Speaker connected (USB or 3.5mm)"
-echo "  - PCA9685 + servos wired to I2C (optional)"
-echo "  - Verify I2C: sudo i2cdetect -y 1"
+for hardware_group in i2c video audio gpio; do
+    if getent group "${hardware_group}" >/dev/null; then
+        sudo usermod -aG "${hardware_group}" "${R08Y_USER}"
+    fi
+done
+
+echo "[6/6] Checking the Freenove source path"
+freenove_path="${R08Y_HOME}/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Server"
+if [[ -f "${freenove_path}/motor.py" ]]; then
+    echo "Official Freenove modules found: ${freenove_path}"
+else
+    echo "WARNING: Official Freenove modules were not found at ${freenove_path}."
+    echo "Clone the official FNK0043 repository before starting R08Y."
+fi
+
+echo
+echo "Installation complete."
+echo "1. Edit ${SERVICE_ENV_DIR}/r08y.env with API keys."
+echo "2. Review ${INSTALL_DIR}/config.yaml."
+echo "3. Reboot once if group membership or I2C settings changed."
+echo "4. Passive check: cd ${INSTALL_DIR} && ./venv/bin/python -m r08y --smoke-test"
+echo "5. Guided audio: ./venv/bin/python -m r08y --config config.yaml --audio-test"
+echo "6. Speech audition: ./venv/bin/python -m r08y --config config.yaml --speech-test"
+echo "7. Start: sudo systemctl start r08y"
+echo "8. Logs: journalctl -u r08y -f"
