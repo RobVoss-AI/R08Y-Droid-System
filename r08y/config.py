@@ -104,9 +104,11 @@ class AudioConfig:
 @dataclass
 class WakeWordConfig:
     engine: str = "porcupine"
+    phrase: str = "ROBY"
     porcupine_access_key: str = ""
-    keyword_path: Optional[str] = None
+    keyword_path: Optional[str] = "/opt/r08y/wake_words/roby.ppn"
     sensitivity: float = 0.5
+    allow_rms_fallback: bool = False
 
 
 @dataclass
@@ -248,6 +250,7 @@ def _apply_env_overrides(config: R08YConfig) -> None:
         "R08Y_OPENAI_API_KEY": ("stt", "openai_api_key"),
         "R08Y_GROQ_API_KEY": ("stt", "groq_api_key"),
         "R08Y_PICOVOICE_KEY": ("wake_word", "porcupine_access_key"),
+        "R08Y_WAKE_WORD_PATH": ("wake_word", "keyword_path"),
         "R08Y_FREENOVE_PATH": ("freenove", "library_path"),
     }
     for env_var, (section, attr) in env_map.items():
@@ -311,6 +314,17 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("audio hardware_channels must be positive or null")
     if config.audio.capture_backend not in {"auto", "alsa", "pyaudio"}:
         errors.append("audio capture_backend must be auto, alsa, or pyaudio")
+    if config.wake_word.engine not in {"porcupine", "rms"}:
+        errors.append("wake_word engine must be porcupine or rms")
+    if not config.wake_word.phrase.strip():
+        errors.append("wake_word phrase must not be empty")
+    if not 0 <= config.wake_word.sensitivity <= 1:
+        errors.append("wake_word sensitivity must be between 0 and 1")
+    if config.wake_word.engine == "porcupine" and (
+        not config.wake_word.keyword_path
+        or not config.wake_word.keyword_path.casefold().endswith(".ppn")
+    ):
+        errors.append("wake_word keyword_path must point to a custom .ppn model")
     if not re.fullmatch(r"[+-]\d+%", config.tts.rate):
         errors.append("tts rate must use a signed percentage such as +0% or -10%")
     if not re.fullmatch(r"[+-]\d+Hz", config.tts.pitch):

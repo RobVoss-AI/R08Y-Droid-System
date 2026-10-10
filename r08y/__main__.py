@@ -41,6 +41,11 @@ def main():
         help="Run a guided pan/tilt expression test; wheels remain inactive",
     )
     parser.add_argument(
+        "--wake-word-test",
+        action="store_true",
+        help="Listen for the configured custom wake word without starting other hardware",
+    )
+    parser.add_argument(
         "--speech-voice",
         help="Temporarily override the voice for --speech-test",
     )
@@ -101,15 +106,21 @@ def main():
             args.audio_test,
             args.speech_test,
             args.expression_test,
+            args.wake_word_test,
             args.smoke_test,
         )
     )
     if selected_test_modes > 1:
         parser.error(
-            "--audio-test, --speech-test, --expression-test, and --smoke-test "
-            "are separate test modes"
+            "--audio-test, --speech-test, --wake-word-test, --expression-test, "
+            "and --smoke-test are separate test modes"
         )
-    if (args.audio_test or args.speech_test or args.expression_test) and (
+    if (
+        args.audio_test
+        or args.speech_test
+        or args.expression_test
+        or args.wake_word_test
+    ) and (
         args.exercise_hardware or args.exercise_mobility
     ):
         parser.error("hardware exercise flags cannot be combined with guided test modes")
@@ -142,6 +153,21 @@ def main():
             print("\nR08Y speech test stopped.", flush=True)
             os._exit(130)
         print_smoke_results(results, heading="R08Y speech audition")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
+    if args.wake_word_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_wake_word_test
+
+        try:
+            results = asyncio.run(run_wake_word_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y wake-word test stopped.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y ROBY wake-word test")
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 
     if args.expression_test:

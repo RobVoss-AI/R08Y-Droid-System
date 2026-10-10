@@ -109,6 +109,13 @@ async def collect_runtime_health(
             voice_input.device_name or "not available",
         ),
     )
+    wake_status = getattr(voice_input, "wake_status", "fail")
+    if wake_status not in {"pass", "warn", "fail"}:
+        wake_status = "fail"
+    report.components["wake_word"] = ComponentHealth(
+        wake_status,
+        getattr(voice_input, "wake_detail", "wake-word status unavailable"),
+    )
     report.components["speaker_path"] = ComponentHealth(
         "pass" if tts.playback_available else "fail",
         getattr(

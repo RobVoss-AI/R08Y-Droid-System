@@ -133,11 +133,21 @@ async def voice_pipeline(
 ) -> None:
     """Event-driven voice loop: wake → record → transcribe → think → speak."""
     if not voice_input.available:
-        logger.warning("Voice input not available — voice pipeline disabled")
+        logger.warning("Voice input not available; voice pipeline disabled")
+        await shutdown.wait()
+        return
+    if not voice_input.wake_available:
+        logger.error(
+            "Voice pipeline disabled: %s",
+            voice_input.wake_detail,
+        )
         await shutdown.wait()
         return
 
-    logger.info("Voice pipeline started — listening for wake word")
+    logger.info(
+        "Voice pipeline started; say '%s'",
+        voice_input.wake_phrase,
+    )
 
     async def set_interaction(state_name: InteractionState) -> None:
         await expression.set_interaction_state(state_name)
@@ -479,6 +489,11 @@ async def run(config_path: str = "config.yaml") -> None:
                 await tts.speak(
                     "R08Y is online, but microphone capture failed. "
                     "Unplug and reconnect my microphone USB cable."
+                )
+            elif not voice_input.wake_available:
+                await tts.speak(
+                    "R08Y is online, but the Roby wake word is not armed. "
+                    "Run the wake word test."
                 )
             else:
                 await tts.speak("R08Y online. Ready when you are.")

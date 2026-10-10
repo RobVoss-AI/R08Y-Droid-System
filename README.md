@@ -4,7 +4,7 @@ R08Y turns a Raspberry Pi 4B and Freenove 4WD mecanum chassis into a voice-contr
 
 ## Status
 
-In development. XVF3800 capture and speaker playback have been verified on the Pi. The expression kernel and mock-hardware suite are desktop-verified. Live acceptance still remains for pan/tilt expression, the integrated R08Y voice turn, motor direction, and camera selection.
+In development. XVF3800 capture and speaker playback have been verified on the Pi. The ROBY wake-word path, expression kernel, and mock-hardware suite are desktop-verified. Live acceptance still remains for ROBY detection, pan/tilt expression, the integrated R08Y voice turn, motor direction, and camera selection.
 
 ## Stack
 
@@ -48,6 +48,8 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 - Numeric audio indexes are unstable across reboots. Input and output default to a strict name match for `XVF3800`; R08Y will not silently speak through another sink.
 - The XVF3800 uses a name-resolved `arecord` stream at its verified native S16_LE, 16 kHz, two-channel format. Reads have a hard timeout, and R08Y downmixes to 16 kHz mono for wake word and STT processing. Other microphones retain the PyAudio fallback.
 - Startup reads an actual capture chunk. If the XVF3800 returns an immediate I/O error or no samples before the deadline, R08Y closes capture and reports the known physical USB unplug/replug recovery.
+- The production wake word is `ROBY`. R08Y requires a Raspberry Pi Porcupine `.ppn` model and fails closed when the model or Picovoice AccessKey is missing. RMS sound triggering remains an explicit development option and is disabled by default.
+- Custom wake-word models and API keys are local deployment assets. The repository ignores `.ppn` files, and secrets stay in `/etc/r08y/r08y.env`.
 - One expression controller owns every runtime pan/tilt write. Face tracking and skills submit bounded gaze targets or named gestures to its queue.
 - Conversational states add restrained idle, listening, thinking, and speaking motion. `--expression-test` exercises only pan/tilt and never initializes wheel movement.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
@@ -58,7 +60,7 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 ## Architecture
 
 ```text
-XVF3800 USB input -> wake word -> record -> Whisper STT
+XVF3800 USB input -> ROBY model -> record -> Whisper STT
                                              |
                                              v
 Freenove sensors -> skill commands ------> Claude -> Edge TTS -> XVF3800 output
@@ -117,10 +119,11 @@ R08Y_ANTHROPIC_API_KEY=
 R08Y_GROQ_API_KEY=
 R08Y_OPENAI_API_KEY=
 R08Y_PICOVOICE_KEY=
+R08Y_WAKE_WORD_PATH=/opt/r08y/wake_words/roby.ppn
 R08Y_FREENOVE_PATH=
 ```
 
-The minimum conversational path uses Anthropic, Groq or OpenAI for transcription, Picovoice for the wake word, and Edge TTS for speech. Weather uses Open-Meteo without an API key.
+The minimum conversational path uses Anthropic, Groq or OpenAI for transcription, a Raspberry Pi Porcupine model for the ROBY wake word, and Edge TTS for speech. Generate the platform-specific custom model in [Picovoice Console](https://console.picovoice.ai/) and keep it outside Git. Weather uses Open-Meteo without an API key.
 
 The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/models/overview) and [`whisper-large-v3`](https://console.groq.com/docs/model/whisper-large-v3). Both identifiers were checked against their providers’ model documentation on October 4, 2026.
 
@@ -138,6 +141,9 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 
 # Guided two-second microphone sample and speaker tone; no other hardware
 ./venv/bin/python -m r08y --config config.yaml --audio-test
+
+# Detect ROBY with the configured custom model; no camera, servos, or motors
+./venv/bin/python -m r08y --config config.yaml --wake-word-test
 
 # Speak a fixed sentence with the configured voice, rate, pitch, and volume
 ./venv/bin/python -m r08y --config config.yaml --speech-test

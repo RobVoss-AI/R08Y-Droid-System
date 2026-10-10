@@ -290,6 +290,82 @@ async def run_speech_test(
         await tts.stop()
 
 
+async def run_wake_word_test(
+    config: R08YConfig,
+    *,
+    voice_factory=None,
+    timeout_seconds: float = 15.0,
+    emit: Callable[[str], None] = print,
+) -> List[SmokeResult]:
+    """Arm only the microphone and verify the configured phrase is detected."""
+    if voice_factory is None:
+        from r08y.modules.voice_input import VoiceInput
+
+        voice_factory = VoiceInput
+    voice = voice_factory(config.audio, config.wake_word)
+    emit(
+        f"R08Y wake-word test starting. This listens only for '{config.wake_word.phrase}'."
+    )
+    try:
+        await voice.start()
+        if not voice.available:
+            return [
+                SmokeResult(
+                    "wake_word",
+                    "fail",
+                    getattr(voice, "capture_detail", "microphone capture unavailable"),
+                )
+            ]
+        if not voice.wake_available:
+            return [
+                SmokeResult(
+                    "wake_word",
+                    "fail",
+                    voice.wake_detail,
+                )
+            ]
+        if voice.wake_engine != "porcupine":
+            return [
+                SmokeResult(
+                    "wake_word",
+                    "fail",
+                    f"expected {config.wake_word.phrase} phrase recognition; "
+                    f"active engine is {voice.wake_engine}",
+                )
+            ]
+        timeout_label = (
+            "1 second"
+            if timeout_seconds == 1
+            else f"{timeout_seconds:.0f} seconds"
+        )
+        emit(
+            f"READY: Say '{config.wake_word.phrase}' once within "
+            f"{timeout_label}."
+        )
+        try:
+            detected = await asyncio.wait_for(
+                voice.wait_for_wake(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            detected = False
+        return [
+            _result(
+                "wake_word",
+                detected,
+                (
+                    f"'{config.wake_word.phrase}' detected by the custom model"
+                    if detected
+                    else (
+                        f"'{config.wake_word.phrase}' was not detected within "
+                        f"{timeout_seconds:.0f} seconds"
+                    )
+                ),
+            )
+        ]
+    finally:
+        await voice.stop()
+
+
 async def run_expression_test(
     config: R08YConfig,
     *,

@@ -19,6 +19,9 @@ def test_example_config_is_valid():
     assert "lightly playful droid personality" in config.ai.spoken_style
     assert config.expression.enabled is True
     assert config.expression.max_step_degrees == 3.0
+    assert config.wake_word.phrase == "ROBY"
+    assert config.wake_word.keyword_path == "/opt/r08y/wake_words/roby.ppn"
+    assert config.wake_word.allow_rms_fallback is False
     assert config.mobility.require_distance_for_forward is True
 
 
@@ -118,3 +121,18 @@ def test_invalid_expression_motion_is_rejected(tmp_path):
     assert any("gesture_scale" in error for error in errors)
     assert any("ambient movement" in error for error in errors)
     assert any("queue_size" in error for error in errors)
+
+
+def test_invalid_wake_word_configuration_is_rejected(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "wake_word:\n"
+        "  engine: guess\n"
+        "  phrase: ''\n"
+        "  keyword_path: model.txt\n"
+        "  sensitivity: 2\n"
+    )
+    errors = validate_config(load_config(str(config_file)))
+    assert any("engine" in error for error in errors)
+    assert any("phrase" in error for error in errors)
+    assert any("sensitivity" in error for error in errors)

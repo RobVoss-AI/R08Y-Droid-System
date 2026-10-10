@@ -142,6 +142,8 @@ def test_startup_uses_xvf3800_native_capture_and_downmixes(monkeypatch):
     async def run():
         await voice.start()
         assert voice.available
+        assert voice.wake_available
+        assert voice.wake_engine == "rms"
         assert voice.capture_status == "pass"
         assert "S16_LE 16000 Hz/2 ch" in voice.capture_detail
         assert fake.open_calls == [
@@ -158,6 +160,70 @@ def test_startup_uses_xvf3800_native_capture_and_downmixes(monkeypatch):
         await voice.stop()
 
     asyncio.run(run())
+
+
+def test_porcupine_requires_custom_roby_model_and_never_substitutes_computer(
+    monkeypatch, tmp_path
+):
+    model_path = tmp_path / "roby.ppn"
+    model_path.write_bytes(b"custom model")
+    calls = []
+
+    class FakePorcupine:
+        sample_rate = 16000
+        frame_length = 512
+
+        def delete(self):
+            return None
+
+    monkeypatch.setattr(voice_input_module, "PORCUPINE_AVAILABLE", True)
+    monkeypatch.setattr(
+        voice_input_module,
+        "pvporcupine",
+        SimpleNamespace(
+            create=lambda **kwargs: calls.append(kwargs) or FakePorcupine()
+        ),
+        raising=False,
+    )
+    voice = VoiceInput(
+        AudioConfig(),
+        WakeWordConfig(
+            phrase="ROBY",
+            porcupine_access_key="local-test-key",
+            keyword_path=str(model_path),
+        ),
+    )
+
+    assert voice._init_porcupine()
+    assert voice.wake_available
+    assert voice.wake_status == "pass"
+    assert "ROBY" in voice.wake_detail
+    assert calls == [
+        {
+            "access_key": "local-test-key",
+            "keyword_paths": [str(model_path)],
+            "sensitivities": [0.5],
+        }
+    ]
+    assert "keywords" not in calls[0]
+
+
+def test_missing_picovoice_key_fails_closed_without_rms_fallback(monkeypatch):
+    monkeypatch.setattr(voice_input_module, "PORCUPINE_AVAILABLE", True)
+    voice = VoiceInput(
+        AudioConfig(),
+        WakeWordConfig(
+            phrase="ROBY",
+            porcupine_access_key="",
+            keyword_path="/opt/r08y/wake_words/roby.ppn",
+            allow_rms_fallback=False,
+        ),
+    )
+
+    assert not voice._init_porcupine()
+    assert not voice.wake_available
+    assert voice.wake_engine == "none"
+    assert "AccessKey" in voice.wake_detail
 
 
 def test_xvf3800_auto_backend_uses_name_resolved_bounded_alsa(monkeypatch):

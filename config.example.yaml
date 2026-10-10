@@ -85,9 +85,11 @@ audio:
 
 wake_word:
   engine: porcupine
+  phrase: ROBY
   porcupine_access_key: ""
-  keyword_path: null
+  keyword_path: /opt/r08y/wake_words/roby.ppn
   sensitivity: 0.5
+  allow_rms_fallback: false  # Never substitute a generic sound trigger in normal use
 
 stt:
   provider: groq

@@ -12,6 +12,7 @@ import wave
 from array import array
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum, auto
+from pathlib import Path
 from typing import Optional
 
 from r08y.config import AudioConfig, WakeWordConfig
@@ -72,6 +73,11 @@ class VoiceInput:
         self.capture_status = "not-tested"
         self.capture_detail = "startup capture self-test has not run"
         self.requires_usb_reseat = False
+        self.wake_phrase = wake_config.phrase
+        self.wake_available = False
+        self.wake_status = "not-tested"
+        self.wake_engine = "none"
+        self.wake_detail = "wake-word startup has not run"
         self.available = False
 
     def _is_xvf3800(self) -> bool:
@@ -275,31 +281,69 @@ class VoiceInput:
 
     def _init_porcupine(self) -> bool:
         if not PORCUPINE_AVAILABLE:
+            self._set_wake_failure("pvporcupine is not installed")
             return False
         key = self._wake_config.porcupine_access_key
         if not key or key.startswith("YOUR_"):
-            logger.warning("Picovoice key not set; using RMS wake trigger")
+            self._set_wake_failure(
+                "Picovoice AccessKey is not set in /etc/r08y/r08y.env"
+            )
+            return False
+        keyword_path = self._wake_config.keyword_path
+        if not keyword_path:
+            self._set_wake_failure(
+                f"Custom {self._wake_config.phrase} wake-word model path is not configured"
+            )
+            return False
+        model_path = Path(keyword_path).expanduser()
+        if not model_path.is_file():
+            self._set_wake_failure(
+                f"Custom {self._wake_config.phrase} wake-word model not found: {model_path}"
+            )
             return False
         try:
-            kwargs = {"access_key": key, "sensitivities": [self._wake_config.sensitivity]}
-            if self._wake_config.keyword_path:
-                kwargs["keyword_paths"] = [self._wake_config.keyword_path]
-            else:
-                kwargs["keywords"] = ["computer"]
-            self._porcupine = pvporcupine.create(**kwargs)
+            self._porcupine = pvporcupine.create(
+                access_key=key,
+                keyword_paths=[str(model_path)],
+                sensitivities=[self._wake_config.sensitivity],
+            )
             if self._porcupine.sample_rate != self._audio_config.sample_rate:
                 raise ValueError(
                     f"Porcupine requires {self._porcupine.sample_rate}Hz, "
                     f"audio processing is {self._audio_config.sample_rate}Hz"
                 )
-            logger.info("Porcupine wake-word engine initialized")
+            self.wake_available = True
+            self.wake_status = "pass"
+            self.wake_engine = "porcupine"
+            self.wake_detail = (
+                f"listening for '{self._wake_config.phrase}' with {model_path.name}"
+            )
+            logger.info("Wake word armed: %s", self.wake_detail)
             return True
-        except Exception:
-            logger.exception("Failed to initialize Porcupine; using RMS trigger")
+        except Exception as exc:
+            self._set_wake_failure(
+                f"Failed to initialize {self._wake_config.phrase} wake word: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            logger.debug("Porcupine initialization detail", exc_info=True)
             if self._porcupine:
                 self._porcupine.delete()
                 self._porcupine = None
             return False
+
+    def _set_wake_failure(self, detail: str) -> None:
+        self.wake_available = False
+        self.wake_status = "fail"
+        self.wake_engine = "none"
+        self.wake_detail = detail
+        logger.error("Wake word unavailable: %s", detail)
+
+    def _enable_rms_wake(self, detail: str) -> None:
+        self.wake_available = True
+        self.wake_status = "warn"
+        self.wake_engine = "rms"
+        self.wake_detail = detail
+        logger.warning("Wake trigger is not phrase recognition: %s", detail)
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -311,11 +355,25 @@ class VoiceInput:
         )
         if not capture_ok:
             return
+        wake_ok = False
         if self._wake_config.engine == "porcupine":
-            await loop.run_in_executor(self._executor, self._init_porcupine)
+            wake_ok = await loop.run_in_executor(self._executor, self._init_porcupine)
+        elif self._wake_config.engine == "rms":
+            self._enable_rms_wake(
+                "explicit RMS development mode; any sound above the threshold can trigger"
+            )
+            wake_ok = True
+        if not wake_ok and self._wake_config.allow_rms_fallback:
+            self._enable_rms_wake(
+                f"RMS fallback enabled because '{self._wake_config.phrase}' was not armed"
+            )
         self._running = True
         self.available = True
-        logger.info("Voice input ready (wake engine: %s)", "porcupine" if self._porcupine else "rms")
+        logger.info(
+            "Voice input ready (capture=%s, wake=%s)",
+            self.capture_backend,
+            self.wake_detail,
+        )
 
     def _normalize_audio(self, audio_data: bytes) -> bytes:
         """Downmix and resample PCM into the configured processing format."""
@@ -379,7 +437,7 @@ class VoiceInput:
         return self._porcupine.process(pcm) >= 0
 
     async def wait_for_wake(self) -> bool:
-        if not self.available:
+        if not self.available or not self.wake_available:
             return False
         self._state = VoiceState.IDLE
         loop = asyncio.get_running_loop()
@@ -390,9 +448,14 @@ class VoiceInput:
                 continue
             if self._porcupine and self._check_wake_porcupine(chunk):
                 self._state = VoiceState.LISTENING
+                logger.info("Wake word '%s' detected", self._wake_config.phrase)
                 return True
-            if not self._porcupine and self._compute_rms(chunk) > self._audio_config.rms_threshold:
+            if (
+                self.wake_engine == "rms"
+                and self._compute_rms(chunk) > self._audio_config.rms_threshold
+            ):
                 self._state = VoiceState.LISTENING
+                logger.info("RMS sound trigger detected")
                 return True
         return False
 

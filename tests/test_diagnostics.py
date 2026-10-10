@@ -1,7 +1,12 @@
 import asyncio
 
 from r08y.config import R08YConfig
-from r08y.diagnostics import run_audio_test, run_expression_test, run_speech_test
+from r08y.diagnostics import (
+    run_audio_test,
+    run_expression_test,
+    run_speech_test,
+    run_wake_word_test,
+)
 
 
 class FakeVoice:
@@ -111,6 +116,77 @@ def test_speech_test_auditions_configured_voice_without_other_hardware():
         ("speech_playback", "pass")
     ]
     assert tts.stopped
+
+
+def test_wake_word_test_requires_and_detects_custom_roby_model():
+    class FakeWakeVoice:
+        available = False
+        wake_available = False
+        wake_engine = "none"
+        wake_detail = "not started"
+
+        def __init__(self):
+            self.stopped = False
+
+        async def start(self):
+            self.available = True
+            self.wake_available = True
+            self.wake_engine = "porcupine"
+            self.wake_detail = "listening for 'ROBY'"
+
+        async def wait_for_wake(self):
+            return True
+
+        async def stop(self):
+            self.stopped = True
+
+    voice = FakeWakeVoice()
+    messages = []
+    results = asyncio.run(
+        run_wake_word_test(
+            R08YConfig(),
+            voice_factory=lambda _audio, _wake: voice,
+            timeout_seconds=1,
+            emit=messages.append,
+        )
+    )
+
+    assert messages == [
+        "R08Y wake-word test starting. This listens only for 'ROBY'.",
+        "READY: Say 'ROBY' once within 1 second.",
+    ]
+    assert [(result.name, result.status) for result in results] == [
+        ("wake_word", "pass")
+    ]
+    assert voice.stopped
+
+
+def test_wake_word_test_reports_missing_custom_model_without_waiting():
+    class FakeWakeVoice:
+        available = True
+        wake_available = False
+        wake_engine = "none"
+        wake_detail = "Custom ROBY wake-word model not found"
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            return None
+
+    results = asyncio.run(
+        run_wake_word_test(
+            R08YConfig(),
+            voice_factory=lambda _audio, _wake: FakeWakeVoice(),
+            timeout_seconds=1,
+            emit=lambda _message: None,
+        )
+    )
+
+    assert [(result.name, result.status) for result in results] == [
+        ("wake_word", "fail")
+    ]
+    assert "model not found" in results[0].detail
 
 
 def test_expression_test_runs_named_sequence_without_mobility():
