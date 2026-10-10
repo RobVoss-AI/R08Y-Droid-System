@@ -290,6 +290,83 @@ async def run_speech_test(
         await tts.stop()
 
 
+async def run_expression_test(
+    config: R08YConfig,
+    *,
+    servo_factory=None,
+    expression_factory=None,
+    emit: Callable[[str], None] = print,
+) -> List[SmokeResult]:
+    """Run a bounded pan/tilt-only gesture sequence with explicit guidance."""
+    from r08y.modules.expression_controller import ExpressionController
+    from r08y.modules.servo_controller import create_servo_controller
+
+    servo_factory = servo_factory or create_servo_controller
+    expression_factory = expression_factory or ExpressionController
+    servo = servo_factory(config.servos)
+    expression = expression_factory(servo, config.servos, config.expression)
+    emit("R08Y expression test starting. The wheels will not move.")
+    emit("CLEARANCE: Keep hands and cables clear of the camera pan/tilt assembly.")
+    results: List[SmokeResult] = []
+    try:
+        await servo.start()
+        if not servo.available:
+            return [
+                SmokeResult(
+                    "expression_sequence",
+                    "fail",
+                    f"pan/tilt unavailable: {type(servo).__name__}",
+                )
+            ]
+        await expression.start()
+        if not expression.available:
+            return [
+                SmokeResult(
+                    "expression_sequence",
+                    "fail",
+                    "expression controller did not start",
+                )
+            ]
+
+        sequence = (
+            ("acknowledge", "small acknowledgement"),
+            ("nod", "yes nod"),
+            ("shake", "no shake"),
+            ("curious", "curious look"),
+            ("pleased", "pleased response"),
+            ("uncertain", "uncertain response"),
+            ("greet", "greeting"),
+        )
+        await expression.home()
+        completed = True
+        for gesture, label in sequence:
+            emit(f"GESTURE: {label}.")
+            completed = await expression.perform_gesture(gesture) and completed
+        completed = await expression.home() and completed
+        results.append(
+            _result(
+                "expression_sequence",
+                completed,
+                (
+                    "seven bounded pan/tilt gestures completed and returned home; "
+                    "confirm movement was smooth and unobstructed"
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(
+            SmokeResult(
+                "expression_sequence", "fail", f"{type(exc).__name__}: {exc}"
+            )
+        )
+    finally:
+        try:
+            await expression.stop()
+        finally:
+            await servo.stop()
+    return results
+
+
 async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> List[SmokeResult]:
     # Imports are deferred so passive diagnostics can still explain missing Pi packages.
     from r08y.modules.camera import CameraCapture

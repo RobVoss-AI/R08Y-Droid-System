@@ -1,7 +1,7 @@
 import asyncio
 
 from r08y.config import R08YConfig
-from r08y.diagnostics import run_audio_test, run_speech_test
+from r08y.diagnostics import run_audio_test, run_expression_test, run_speech_test
 
 
 class FakeVoice:
@@ -111,3 +111,71 @@ def test_speech_test_auditions_configured_voice_without_other_hardware():
         ("speech_playback", "pass")
     ]
     assert tts.stopped
+
+
+def test_expression_test_runs_named_sequence_without_mobility():
+    class FakeServo:
+        available = False
+
+        def __init__(self):
+            self.stopped = False
+
+        async def start(self):
+            self.available = True
+
+        async def stop(self):
+            self.stopped = True
+            self.available = False
+
+    class FakeExpression:
+        available = False
+
+        def __init__(self, servo, _servo_config, _expression_config):
+            self.servo = servo
+            self.gestures = []
+            self.home_count = 0
+            self.stopped = False
+
+        async def start(self):
+            self.available = True
+
+        async def perform_gesture(self, name):
+            self.gestures.append(name)
+            return True
+
+        async def home(self):
+            self.home_count += 1
+            return True
+
+        async def stop(self):
+            self.stopped = True
+            self.available = False
+
+    servo = FakeServo()
+    holder = {}
+    messages = []
+
+    def expression_factory(*args):
+        holder["expression"] = FakeExpression(*args)
+        return holder["expression"]
+
+    results = asyncio.run(
+        run_expression_test(
+            R08YConfig(),
+            servo_factory=lambda _config: servo,
+            expression_factory=expression_factory,
+            emit=messages.append,
+        )
+    )
+
+    expression = holder["expression"]
+    assert "wheels will not move" in messages[0]
+    assert expression.gestures == [
+        "acknowledge", "nod", "shake", "curious", "pleased", "uncertain", "greet"
+    ]
+    assert expression.home_count == 2
+    assert expression.stopped
+    assert servo.stopped
+    assert [(result.name, result.status) for result in results] == [
+        ("expression_sequence", "pass")
+    ]

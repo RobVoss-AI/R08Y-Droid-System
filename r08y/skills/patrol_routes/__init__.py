@@ -77,8 +77,7 @@ class Skill(BaseSkill):
         return "Patrol stopped."
 
     async def cmd_save_pos(self, text: str, user_name: str) -> Optional[str]:
-        pan = await self.ctx.servo.get_angle(0)
-        tilt = await self.ctx.servo.get_angle(1)
+        pan, tilt = await self.ctx.expression.get_gaze_target()
         if "default" not in self._routes:
             self._routes["default"] = []
         self._routes["default"].append({"pan": pan, "tilt": tilt, "dwell": 3.0})
@@ -105,8 +104,7 @@ class Skill(BaseSkill):
             for i, wp in enumerate(waypoints):
                 if not self._patrolling:
                     break
-                await self.ctx.servo.set_angle(0, wp["pan"])
-                await self.ctx.servo.set_angle(1, wp["tilt"])
+                await self.ctx.expression.look_at(wp["pan"], wp["tilt"])
                 await self.ctx.event_bus.emit(
                     "patrol.waypoint", source=self.name, index=i, pan=wp["pan"], tilt=wp["tilt"]
                 )

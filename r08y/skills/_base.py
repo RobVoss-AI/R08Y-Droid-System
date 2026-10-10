@@ -16,7 +16,7 @@ import numpy as np
 if TYPE_CHECKING:
     from r08y.skills._bus import EventBus
     from r08y.skills._registry import CommandRegistry
-    from r08y.modules.servo_controller import MotorController
+    from r08y.modules.expression_controller import ExpressionController
     from r08y.modules.text_to_speech import TextToSpeech
     from r08y.modules.camera import CameraCapture
     from r08y.modules.mobility import MobilityController
@@ -61,7 +61,7 @@ class SkillContext:
     """Runtime context injected into skills — their interface to the droid."""
     event_bus: "EventBus"
     command_registry: "CommandRegistry"
-    servo: "MotorController"
+    expression: "ExpressionController"
     tts: "TextToSpeech"
     camera: "CameraCapture"
     mobility: "MobilityController"

@@ -86,7 +86,7 @@ class SkillManager:
                 logger.exception("Failed to load skill '%s'", name)
 
     async def setup_all(
-        self, servo, tts, camera, state, mobility=None, distance=None, light_sensors=None
+        self, expression, tts, camera, state, mobility=None, distance=None, light_sensors=None
     ) -> None:
         """Inject runtime context into all loaded skills and register commands."""
         failed = []
@@ -99,7 +99,7 @@ class SkillManager:
                 context = SkillContext(
                     event_bus=self.event_bus,
                     command_registry=self.command_registry,
-                    servo=servo,
+                    expression=expression,
                     tts=tts,
                     camera=camera,
                     mobility=mobility,

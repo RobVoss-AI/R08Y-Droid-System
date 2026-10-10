@@ -11,7 +11,7 @@ This map records how the original R08Y design was adapted to Rob’s working Fre
 | Freenove light sensors | Working | Add an ADC adapter around official `ADC.read_adc(0/1)`. Require valid upstream `params.json`. | Both channels return plausible voltages. |
 | Freenove ultrasonic sensor | Working | Replace hardcoded generic HC-SR04 pins with official `Ultrasonic.get_distance()`. | Repeated plausible distance; forward movement blocks inside 30 cm. |
 | Freenove camera | Working | Modify capture to try Picamera2, then OpenCV/V4L2, with reconnect and flip settings. | One frame with expected shape; continuous tracking in runtime. |
-| Freenove pan/tilt | Working | Replace generic PCA9685 assumptions with official `Servo.set_servo_pwm("0"/"1", angle)`. | Home and face tracking without binding at configured limits. |
+| Freenove pan/tilt | Working | Use the official `Servo.set_servo_pwm("0"/"1", angle)` adapter behind a single expression controller. | Guided expression sequence and face tracking without binding at configured limits. |
 | XVF3800 four-mic USB array | Capture verified at S16_LE, 16 kHz, two channels; LEDs and direction response working | Resolve by name, open the native format, downmix to 16 kHz mono for wake word/STT, and detect the known open-but-broken USB state with a startup read. | Matching ALSA/PipeWire devices, startup capture read, microphone RMS above zero, wake-word turn completes. |
 | Seeed 4-ohm 5-watt speaker | Working through the XVF3800 after setting its `PCM 1` level to 100 | Route WAV/TTS through `pw-play` to the PipeWire sink resolved by name. | Audible tone, startup greeting, and AI response. |
 | UPS HAT and battery | Not integrated | Defer. Keep disabled and report as skipped. No model-specific code until the exact HAT is identified and tested separately. | Future power and shutdown plan after direct-power acceptance. |
@@ -33,6 +33,7 @@ These modules received only compatibility or lifecycle wiring where required. Th
 |---|---|---|
 | Camera | USB webcam only | Picamera2 or OpenCV/V4L2, selectable device path, reconnect, flips. |
 | Pan/tilt | Generic PCA9685 or guessed GPIO fallback | Official Freenove servo API; GPIO is allowed only with explicit pins. |
+| Expressive motion | Face tracking and skills could write servo angles independently | One queue blends tracking, named gestures, and conversation state before clamped servo writes. |
 | Distance | Generic HC-SR04 with hardcoded pins in a skill | Shared sensor abstraction using the official Freenove ultrasonic API. |
 | Voice input | Fixed numeric audio index and format | Strict device-name selection; bounded XVF3800 `arecord` capture at S16_LE/16 kHz/stereo; downmix/resample; PyAudio fallback; startup read with explicit USB-reseat diagnosis. |
 | Speech output | Generic default player/device | Name-resolved XVF3800 PipeWire sink selection with direct `pw-play --target` routing and compatible playback conversion. |
@@ -48,10 +49,11 @@ These modules received only compatibility or lifecycle wiring where required. Th
 - `r08y/modules/mobility.py`: mecanum mixing, wheel calibration, clearance guard, deadman watchdog, emergency stop, and fake controller.
 - `r08y/modules/audio_devices.py`: named, timeout-protected ALSA capture plus PortAudio fallback and PipeWire resolution.
 - `r08y/modules/health.py`: component-level startup report.
+- `r08y/modules/expression_controller.py`: single-owner pan/tilt queue, smoothing, cancellation, and interaction-state body language.
 - `r08y/diagnostics.py`: passive discovery and opt-in physical exercises.
 - `r08y/skills/mobility_control`: short voice-triggered mecanum movements.
 - `r08y/skills/light_sensors`: plain-language sensor readings.
-- Tests for config validation, audio resolution, Freenove loading and parameter safety, mecanum mixing and guards, sensors, format conversion, camera lifecycle, and servo lifecycle.
+- Tests for config validation, audio resolution, Freenove loading and parameter safety, mecanum mixing and guards, sensors, format conversion, camera lifecycle, servo lifecycle, gesture queueing, cancellation, clamping, and expression diagnostics.
 
 ## Explicit unknowns
 
@@ -77,6 +79,8 @@ The exact UPS model and interface remain unknown. R08Y does not pretend to monit
 6. Shutdown and smoke-test cleanup send zero duty to every wheel.
 7. Motor exercises require an explicit command-line confirmation that the wheels are raised.
 8. GPIO fallbacks require explicit pins; no Freenove mapping is guessed.
+9. The expression controller clamps every pose to configured pan/tilt limits and is the only runtime servo writer.
+10. The guided expression test never initializes the mobility controller.
 
 ## Source of Freenove mappings
 

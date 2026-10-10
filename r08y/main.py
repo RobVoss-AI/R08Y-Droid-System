@@ -20,6 +20,7 @@ from r08y.modules.camera import CameraCapture
 from r08y.modules.face_detector import FaceDetection, create_face_detector
 from r08y.modules.face_recognizer import FaceRecognizer, RecognitionResult
 from r08y.modules.face_tracker import FaceTracker
+from r08y.modules.expression_controller import ExpressionController, InteractionState
 from r08y.modules.servo_controller import create_servo_controller
 from r08y.modules.voice_input import VoiceInput
 from r08y.modules.speech_to_text import create_stt_provider
@@ -125,6 +126,7 @@ async def voice_pipeline(
     tts: TextToSpeech,
     face_recognizer: FaceRecognizer,
     camera: CameraCapture,
+    expression: ExpressionController,
     state: DroidState,
     shutdown: asyncio.Event,
     skill_manager: Optional[SkillManager] = None,
@@ -137,33 +139,56 @@ async def voice_pipeline(
 
     logger.info("Voice pipeline started — listening for wake word")
 
+    async def set_interaction(state_name: InteractionState) -> None:
+        await expression.set_interaction_state(state_name)
+
+    async def speak(text: str) -> None:
+        state.is_listening = False
+        state.is_speaking = True
+        await set_interaction(InteractionState.SPEAKING)
+        try:
+            await tts.speak_and_wait(text)
+        finally:
+            state.is_speaking = False
+            await set_interaction(InteractionState.IDLE)
+
     while not shutdown.is_set():
         # Wait for wake word
         state.is_listening = False
+        await set_interaction(InteractionState.IDLE)
         woke = await voice_input.wait_for_wake()
         if not woke or shutdown.is_set():
             break
 
         # Interrupt any current speech
         tts.interrupt()
+        await expression.cancel_motion()
         state.is_listening = True
+        await set_interaction(InteractionState.LISTENING)
+        await expression.perform_gesture("acknowledge", wait=False, priority=5)
         logger.info("Wake detected — recording speech")
 
         # Record user speech
         audio_bytes = await voice_input.record_speech()
         if audio_bytes is None:
             logger.warning("No speech recorded")
+            state.is_listening = False
+            await set_interaction(InteractionState.IDLE)
             continue
+
+        state.is_listening = False
+        await set_interaction(InteractionState.THINKING)
 
         # Transcribe
         if stt is None:
             logger.warning("STT not configured — cannot transcribe")
+            await set_interaction(InteractionState.IDLE)
             continue
 
         text = await stt.transcribe(audio_bytes)
         if not text:
             logger.warning("Empty transcription")
-            await tts.speak_and_wait("I didn't catch that. Could you say it again?")
+            await speak("I didn't catch that. Could you say it again?")
             continue
 
         logger.info("User said: '%s'", text)
@@ -177,21 +202,29 @@ async def voice_pipeline(
                 logger.info("Skill command matched: '%s' → %s", trigger, cmd.skill_name)
                 response = await cmd.handler(text, user_name)
                 if response:
-                    await tts.speak_and_wait(response)
+                    await speak(response)
+                else:
+                    await set_interaction(InteractionState.IDLE)
                 continue
 
             # Let skills intercept before AI (e.g., dictation mode)
             intercepted = await skill_manager.on_voice_pre_ai(text, user_name)
             if intercepted is not None:
-                await tts.speak_and_wait(intercepted)
+                await speak(intercepted)
                 continue
 
         # 2. Check built-in special commands
         command = brain.check_special_command(text)
         if command:
-            await _handle_special_command(
-                command, text, face_recognizer, tts, state, camera,
-            )
+            state.is_speaking = True
+            await set_interaction(InteractionState.SPEAKING)
+            try:
+                await _handle_special_command(
+                    command, text, face_recognizer, tts, state, camera,
+                )
+            finally:
+                state.is_speaking = False
+                await set_interaction(InteractionState.IDLE)
             continue
 
         # 3. Send to AI brain
@@ -201,8 +234,6 @@ async def voice_pipeline(
             is_known=state.recognized.is_known if state.recognized else False,
         )
 
-        state.is_listening = False
-        state.is_speaking = True
         response = await brain.think(text, visual, user_name)
 
         # Let skills transform response before TTS
@@ -210,8 +241,7 @@ async def voice_pipeline(
             response = await skill_manager.on_voice_post_ai(response)
 
         # Speak the response
-        await tts.speak_and_wait(response)
-        state.is_speaking = False
+        await speak(response)
 
 
 async def _handle_special_command(
@@ -290,6 +320,7 @@ async def _stop_runtime(
     voice_input,
     brain,
     tts,
+    expression=None,
 ) -> None:
     """Stop every component even when startup or one cleanup step fails."""
     logger.info("Shutting down...")
@@ -299,6 +330,11 @@ async def _stop_runtime(
         logger.exception("Emergency motor stop failed during shutdown")
     if skill_manager is not None:
         await skill_manager.stop_all()
+    if expression is not None:
+        try:
+            await expression.stop()
+        except Exception:
+            logger.exception("Expression controller shutdown failed")
     results = await asyncio.gather(
         camera.stop(),
         servo.stop(),
@@ -333,8 +369,9 @@ async def run(config_path: str = "config.yaml") -> None:
     face_detector = create_face_detector(config.face_detection)
     face_recognizer = FaceRecognizer(config.face_recognition)
     servo = create_servo_controller(config.servos)
+    expression = ExpressionController(servo, config.servos, config.expression)
     face_tracker = FaceTracker(
-        servo, config.servos, config.tracker, config.camera.width, config.camera.height
+        expression, config.servos, config.tracker, config.camera.width, config.camera.height
     )
     voice_input = VoiceInput(config.audio, config.wake_word)
     stt = create_stt_provider(config.stt)
@@ -374,6 +411,7 @@ async def run(config_path: str = "config.yaml") -> None:
             tts.start(),
             distance.start(),
         )
+        await expression.start()
         # The forward obstacle guard must initialize before the motors do.
         await mobility.start()
 
@@ -407,7 +445,7 @@ async def run(config_path: str = "config.yaml") -> None:
         available_hw = set()
         for available, name in (
             (camera.available, "camera"),
-            (servo.available, "servos"),
+            (expression.available, "servos"),
             (voice_input.available, "microphone"),
             (tts.available, "tts"),
             (tts.playback_available, "speaker"),
@@ -422,7 +460,7 @@ async def run(config_path: str = "config.yaml") -> None:
         skill_manager = SkillManager(raw_config)
         skill_manager.load_skills(available_hw)
         await skill_manager.setup_all(
-            servo,
+            expression,
             tts,
             camera,
             state,
@@ -464,6 +502,7 @@ async def run(config_path: str = "config.yaml") -> None:
                 tts,
                 face_recognizer,
                 camera,
+                expression,
                 state,
                 shutdown,
                 skill_manager,
@@ -497,4 +536,5 @@ async def run(config_path: str = "config.yaml") -> None:
             voice_input=voice_input,
             brain=brain,
             tts=tts,
+            expression=expression,
         )

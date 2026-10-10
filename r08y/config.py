@@ -73,6 +73,19 @@ class TrackerConfig:
 
 
 @dataclass
+class ExpressionConfig:
+    enabled: bool = True
+    update_interval: float = 0.05
+    max_step_degrees: float = 3.0
+    gesture_scale: float = 1.0
+    ambient_enabled: bool = True
+    idle_sway_degrees: float = 1.5
+    thinking_sway_degrees: float = 3.0
+    speaking_bob_degrees: float = 1.5
+    queue_size: int = 8
+
+
+@dataclass
 class AudioConfig:
     sample_rate: int = 16000
     channels: int = 1
@@ -205,6 +218,7 @@ class R08YConfig:
     face_recognition: FaceRecognitionConfig = field(default_factory=FaceRecognitionConfig)
     servos: ServoConfig = field(default_factory=ServoConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    expression: ExpressionConfig = field(default_factory=ExpressionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     stt: STTConfig = field(default_factory=STTConfig)
@@ -259,6 +273,7 @@ def load_config(config_path: str = "config.yaml") -> R08YConfig:
         face_recognition=_merge_dict_to_dataclass(FaceRecognitionConfig, data.get("face_recognition")),
         servos=_merge_dict_to_dataclass(ServoConfig, data.get("servos")),
         tracker=_merge_dict_to_dataclass(TrackerConfig, data.get("tracker")),
+        expression=_merge_dict_to_dataclass(ExpressionConfig, data.get("expression")),
         audio=_merge_dict_to_dataclass(AudioConfig, data.get("audio")),
         wake_word=_merge_dict_to_dataclass(WakeWordConfig, data.get("wake_word")),
         stt=_merge_dict_to_dataclass(STTConfig, data.get("stt")),
@@ -306,6 +321,23 @@ def validate_config(config: R08YConfig) -> List[str]:
         config.servos.gpio_pan_pin is None or config.servos.gpio_tilt_pin is None
     ):
         errors.append("GPIO servo mode requires gpio_pan_pin and gpio_tilt_pin")
+    if config.expression.update_interval <= 0:
+        errors.append("expression update_interval must be positive")
+    if config.expression.max_step_degrees <= 0:
+        errors.append("expression max_step_degrees must be positive")
+    if not 0 < config.expression.gesture_scale <= 1.5:
+        errors.append("expression gesture_scale must be greater than 0 and no more than 1.5")
+    if any(
+        value < 0 or value > 10
+        for value in (
+            config.expression.idle_sway_degrees,
+            config.expression.thinking_sway_degrees,
+            config.expression.speaking_bob_degrees,
+        )
+    ):
+        errors.append("expression ambient movement must be between 0 and 10 degrees")
+    if not 1 <= config.expression.queue_size <= 32:
+        errors.append("expression queue_size must be between 1 and 32")
     if config.distance.driver == "gpio" and (
         config.distance.trigger_pin is None or config.distance.echo_pin is None
     ):

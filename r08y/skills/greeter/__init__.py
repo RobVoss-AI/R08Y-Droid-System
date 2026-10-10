@@ -7,7 +7,6 @@ welcome. Configurable cooldown so it doesn't greet the same person every frame.
 Events emitted: greeter.welcomed
 """
 
-import asyncio
 import time
 from typing import Dict, Optional
 
@@ -95,15 +94,7 @@ class Skill(BaseSkill):
 
     async def _wave_gesture(self) -> None:
         """Small nod as a greeting gesture."""
-        if not self.ctx.servo.available:
-            return
-        pan_ch, tilt_ch = 0, 1
-        current_tilt = await self.ctx.servo.get_angle(tilt_ch)
-        await self.ctx.servo.set_angle(tilt_ch, current_tilt - 10)
-        await asyncio.sleep(0.2)
-        await self.ctx.servo.set_angle(tilt_ch, current_tilt + 5)
-        await asyncio.sleep(0.2)
-        await self.ctx.servo.set_angle(tilt_ch, current_tilt)
+        await self.ctx.expression.perform_gesture("greet")
 
     async def cmd_enable(self, text: str, user_name: str) -> Optional[str]:
         self._enabled = True

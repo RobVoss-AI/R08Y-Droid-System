@@ -36,6 +36,11 @@ def main():
         help="Speak a short TTS audition without starting other hardware",
     )
     parser.add_argument(
+        "--expression-test",
+        action="store_true",
+        help="Run a guided pan/tilt expression test; wheels remain inactive",
+    )
+    parser.add_argument(
         "--speech-voice",
         help="Temporarily override the voice for --speech-test",
     )
@@ -91,14 +96,23 @@ def main():
         return
 
     selected_test_modes = sum(
-        bool(selected) for selected in (args.audio_test, args.speech_test, args.smoke_test)
+        bool(selected)
+        for selected in (
+            args.audio_test,
+            args.speech_test,
+            args.expression_test,
+            args.smoke_test,
+        )
     )
     if selected_test_modes > 1:
-        parser.error("--audio-test, --speech-test, and --smoke-test are separate test modes")
-    if (args.audio_test or args.speech_test) and (
+        parser.error(
+            "--audio-test, --speech-test, --expression-test, and --smoke-test "
+            "are separate test modes"
+        )
+    if (args.audio_test or args.speech_test or args.expression_test) and (
         args.exercise_hardware or args.exercise_mobility
     ):
-        parser.error("hardware exercise flags cannot be combined with audio test modes")
+        parser.error("hardware exercise flags cannot be combined with guided test modes")
 
     if args.audio_test:
         if errors:
@@ -128,6 +142,21 @@ def main():
             print("\nR08Y speech test stopped.", flush=True)
             os._exit(130)
         print_smoke_results(results, heading="R08Y speech audition")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
+    if args.expression_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_expression_test
+
+        try:
+            results = asyncio.run(run_expression_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y expression test stopped. Returning pan/tilt home.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y guided expression test")
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 
     if args.exercise_mobility and not args.confirm_wheels_raised:

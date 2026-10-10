@@ -17,6 +17,8 @@ def test_example_config_is_valid():
     assert config.tts.rate == "+1%"
     assert config.tts.pitch == "+2Hz"
     assert "lightly playful droid personality" in config.ai.spoken_style
+    assert config.expression.enabled is True
+    assert config.expression.max_step_degrees == 3.0
     assert config.mobility.require_distance_for_forward is True
 
 
@@ -98,3 +100,21 @@ def test_invalid_tts_adjustments_are_rejected(tmp_path):
     assert any("tts rate" in error for error in errors)
     assert any("tts pitch" in error for error in errors)
     assert any("tts volume" in error for error in errors)
+
+
+def test_invalid_expression_motion_is_rejected(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "expression:\n"
+        "  update_interval: 0\n"
+        "  max_step_degrees: -1\n"
+        "  gesture_scale: 2\n"
+        "  idle_sway_degrees: 11\n"
+        "  queue_size: 0\n"
+    )
+    errors = validate_config(load_config(str(config_file)))
+    assert any("update_interval" in error for error in errors)
+    assert any("max_step_degrees" in error for error in errors)
+    assert any("gesture_scale" in error for error in errors)
+    assert any("ambient movement" in error for error in errors)
+    assert any("queue_size" in error for error in errors)
