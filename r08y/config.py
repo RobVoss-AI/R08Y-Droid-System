@@ -79,6 +79,7 @@ class AudioConfig:
     device_index: Optional[int] = None
     device_name: str = "XVF3800"
     require_device_match: bool = True
+    capture_backend: str = "auto"
     hardware_sample_rate: Optional[int] = 16000
     hardware_channels: Optional[int] = 2
     rms_threshold: int = 500
@@ -284,6 +285,8 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("audio hardware_sample_rate must be positive or null")
     if config.audio.hardware_channels is not None and config.audio.hardware_channels <= 0:
         errors.append("audio hardware_channels must be positive or null")
+    if config.audio.capture_backend not in {"auto", "alsa", "pyaudio"}:
+        errors.append("audio capture_backend must be auto, alsa, or pyaudio")
     if config.servos.driver == "gpio" and (
         config.servos.gpio_pan_pin is None or config.servos.gpio_tilt_pin is None
     ):

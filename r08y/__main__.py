@@ -65,13 +65,17 @@ def main():
     if args.smoke_test:
         from r08y.diagnostics import print_smoke_results, run_smoke_test
 
-        results = asyncio.run(
-            run_smoke_test(
-                config,
-                exercise=args.exercise_hardware or args.exercise_mobility,
-                exercise_mobility=args.exercise_mobility,
+        try:
+            results = asyncio.run(
+                run_smoke_test(
+                    config,
+                    exercise=args.exercise_hardware or args.exercise_mobility,
+                    exercise_mobility=args.exercise_mobility,
+                )
             )
-        )
+        except KeyboardInterrupt:
+            print("\nR08Y hardware smoke test stopped.")
+            sys.exit(130)
         print_smoke_results(results, as_json=args.json)
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 

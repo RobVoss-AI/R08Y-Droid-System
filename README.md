@@ -10,7 +10,7 @@ In development. XVF3800 capture and speaker playback have been verified on the P
 
 - Python 3.11+ with `asyncio` pipelines for vision, voice, and skills
 - Official Freenove FNK0043 Python modules behind R08Y hardware adapters
-- OpenCV/Picamera2, PyAudio, PipeWire, Porcupine, Whisper, Claude, and Edge TTS
+- OpenCV/Picamera2, ALSA/PyAudio, PipeWire, Porcupine, Whisper, Claude, and Edge TTS
 - SQLite for face encodings and conversation history
 - `systemd` service for Debian 13 and Raspberry Pi OS, including the user PipeWire runtime
 
@@ -46,8 +46,8 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 - R08Y does not copy or guess Freenove pin and PWM mappings. It loads the official `motor.py`, `servo.py`, `ultrasonic.py`, and `adc.py` modules from the Freenove `Code/Server` directory.
 - The official Freenove `params.json` must identify the connector, controller PCB, and Pi generation before ADC light-sensor initialization. R08Y refuses to trigger the upstream interactive prompt inside the service.
 - Numeric audio indexes are unstable across reboots. Input and output default to a strict name match for `XVF3800`; R08Y will not silently speak through another sink.
-- The XVF3800 opens at its verified native S16_LE, 16 kHz, two-channel format. R08Y downmixes to 16 kHz mono for wake word and STT processing.
-- Startup reads an actual capture chunk. If the XVF3800 opens but returns an immediate I/O error, R08Y reports the known physical USB unplug/replug recovery instead of pretending the microphone is ready.
+- The XVF3800 uses a name-resolved `arecord` stream at its verified native S16_LE, 16 kHz, two-channel format. Reads have a hard timeout, and R08Y downmixes to 16 kHz mono for wake word and STT processing. Other microphones retain the PyAudio fallback.
+- Startup reads an actual capture chunk. If the XVF3800 returns an immediate I/O error or no samples before the deadline, R08Y closes capture and reports the known physical USB unplug/replug recovery.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
 - `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
 - Negative `mobility.wheel_scale` values reverse individual wheels. Confirm direction only with all four wheels clear of the surface.
@@ -73,7 +73,7 @@ r08y/hardware/freenove.py        verifies and loads official kit modules
 r08y/modules/servo_controller.py Freenove pan/tilt or explicit GPIO adapter
 r08y/modules/sensors.py          ultrasonic and light-sensor adapters
 r08y/modules/mobility.py         mecanum mixing, clearance guard, watchdog
-r08y/modules/audio_devices.py    named ALSA, PortAudio, and PipeWire resolution
+r08y/modules/audio_devices.py    named ALSA capture, PortAudio fallback, and PipeWire routing
 r08y/modules/health.py           runtime component health report
 r08y/diagnostics.py              passive and opt-in Pi smoke tests
 ```

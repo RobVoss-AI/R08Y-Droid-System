@@ -63,6 +63,7 @@ audio:
   device_index: null       # Avoid volatile numeric indexes when possible
   device_name: XVF3800
   require_device_match: true
+  capture_backend: auto    # XVF3800 uses bounded arecord; other mics retain PyAudio
   hardware_sample_rate: 16000  # XVF3800 native capture format: S16_LE/16 kHz/stereo
   hardware_channels: 2        # Downmixed to processing channels before wake word/STT
   rms_threshold: 500

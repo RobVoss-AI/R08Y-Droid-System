@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from r08y.config import AudioConfig, WakeWordConfig
 from r08y.modules import voice_input as voice_input_module
+from r08y.modules.audio_devices import AlsaCaptureDevice
 from r08y.modules.voice_input import VoiceInput
 
 
@@ -159,6 +160,42 @@ def test_startup_uses_xvf3800_native_capture_and_downmixes(monkeypatch):
     asyncio.run(run())
 
 
+def test_xvf3800_auto_backend_uses_name_resolved_bounded_alsa(monkeypatch):
+    stream = FakeStream()
+    device = AlsaCaptureDevice(
+        card=7,
+        device=0,
+        card_id="XVF3800",
+        card_name="reSpeaker XVF3800 4-Mic Array",
+        device_name="USB Audio",
+    )
+    monkeypatch.setattr(
+        voice_input_module,
+        "AlsaResolver",
+        lambda: SimpleNamespace(resolve=lambda _name: device),
+    )
+    calls = []
+
+    def create_stream(hardware_id, sample_rate, channels):
+        calls.append((hardware_id, sample_rate, channels))
+        return stream
+
+    monkeypatch.setattr(voice_input_module, "AlsaCaptureStream", create_stream)
+    monkeypatch.setattr(voice_input_module, "PYAUDIO_AVAILABLE", False)
+    voice = VoiceInput(AudioConfig(), WakeWordConfig(engine="rms"))
+
+    async def run():
+        await voice.start()
+        assert voice.available
+        assert voice.capture_backend == "alsa"
+        assert voice.alsa_hardware_id == "hw:7,0"
+        assert calls == [("hw:7,0", 16000, 2)]
+        assert "alsa backend" in voice.capture_detail
+        await voice.stop()
+
+    asyncio.run(run())
+
+
 def test_startup_io_error_reports_usb_reseat_condition(monkeypatch):
     stream = FakeStream(OSError(5, "Input/output error"))
     fake = _install_fake_pyaudio(monkeypatch, stream)
@@ -212,13 +249,42 @@ def test_voice_uses_name_discovered_alsa_id_as_portaudio_alias(monkeypatch):
             resolve=lambda _name: SimpleNamespace(hardware_id="hw:7,0")
         ),
     )
-    voice = VoiceInput(AudioConfig(), WakeWordConfig(engine="rms"))
+    voice = VoiceInput(
+        AudioConfig(capture_backend="pyaudio"),
+        WakeWordConfig(engine="rms"),
+    )
 
     async def run():
         await voice.start()
         assert voice.available
         assert voice.alsa_hardware_id == "hw:7,0"
         assert fake.open_calls[0]["input_device_index"] == 3
+        await voice.stop()
+
+    asyncio.run(run())
+
+
+def test_xvf3800_alsa_timeout_reports_usb_reseat_and_closes(monkeypatch):
+    stream = FakeStream(TimeoutError("ALSA capture timed out without audio data"))
+    device = AlsaCaptureDevice(3, 0, "XVF3800", "reSpeaker XVF3800", "USB Audio")
+    monkeypatch.setattr(
+        voice_input_module,
+        "AlsaResolver",
+        lambda: SimpleNamespace(resolve=lambda _name: device),
+    )
+    monkeypatch.setattr(
+        voice_input_module,
+        "AlsaCaptureStream",
+        lambda _hardware_id, _rate, _channels: stream,
+    )
+    voice = VoiceInput(AudioConfig(), WakeWordConfig(engine="rms"))
+
+    async def run():
+        await voice.start()
+        assert not voice.available
+        assert voice.requires_usb_reseat
+        assert voice.capture_status == "fail"
+        assert not stream.active
         await voice.stop()
 
     asyncio.run(run())

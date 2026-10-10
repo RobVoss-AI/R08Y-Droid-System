@@ -1,4 +1,8 @@
+import io
+import subprocess
+
 from r08y.modules.audio_devices import (
+    AlsaCaptureStream,
     find_alsa_capture,
     find_portaudio_input,
     parse_arecord_list,
@@ -43,6 +47,90 @@ def test_alsa_capture_name_lookup_preserves_other_usb_mics():
     selected = find_alsa_capture(parse_arecord_list(ARECORD_LIST), "Webcam")
     assert selected is not None
     assert selected.hardware_id == "hw:2,0"
+
+
+class FakePipe:
+    def __init__(self, data=b""):
+        self.data = io.BytesIO(data)
+        self.closed = False
+
+    def fileno(self):
+        return 42
+
+    def read(self):
+        return self.data.read()
+
+    def close(self):
+        self.closed = True
+
+
+class FakeProcess:
+    def __init__(self):
+        self.stdout = FakePipe()
+        self.stderr = FakePipe()
+        self.returncode = None
+        self.terminated = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = 0
+
+    def kill(self):
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+def test_alsa_stream_builds_native_command_and_reads_one_chunk():
+    process = FakeProcess()
+    calls = []
+
+    def process_factory(command, **kwargs):
+        calls.append((command, kwargs))
+        return process
+
+    stream = AlsaCaptureStream(
+        "hw:7,0",
+        16000,
+        2,
+        process_factory=process_factory,
+        selector=lambda readable, _writable, _errors, _timeout: (readable, [], []),
+        reader=lambda _descriptor, size: b"\x01" * size,
+        clock=lambda: 0.0,
+    )
+    assert stream.read(512) == b"\x01" * 2048
+    assert calls[0][0] == [
+        "arecord", "-q", "-D", "hw:7,0", "-f", "S16_LE",
+        "-r", "16000", "-c", "2", "-t", "raw",
+    ]
+    assert calls[0][1]["stdout"] == subprocess.PIPE
+    stream.close()
+    assert process.terminated
+    assert process.stdout.closed
+
+
+def test_alsa_stream_has_a_hard_read_timeout():
+    process = FakeProcess()
+    stream = AlsaCaptureStream(
+        "hw:3,0",
+        16000,
+        2,
+        read_timeout=0.25,
+        process_factory=lambda _command, **_kwargs: process,
+        selector=lambda _readable, _writable, _errors, _timeout: ([], [], []),
+        clock=lambda: 0.0,
+    )
+    try:
+        stream.read(512)
+    except TimeoutError as exc:
+        assert "timed out" in str(exc)
+    else:
+        raise AssertionError("Expected bounded ALSA read to time out")
+    stream.close()
 
 
 class FakePyAudio:

@@ -11,6 +11,7 @@ def test_example_config_is_valid():
     assert config.audio.device_name == "XVF3800"
     assert config.audio.hardware_sample_rate == 16000
     assert config.audio.hardware_channels == 2
+    assert config.audio.capture_backend == "auto"
     assert config.tts.playback_command == "pw-play"
     assert config.mobility.require_distance_for_forward is True
 
@@ -62,3 +63,10 @@ def test_invalid_native_audio_format_is_rejected(tmp_path):
     errors = validate_config(load_config(str(config_file)))
     assert any("hardware_sample_rate" in error for error in errors)
     assert any("hardware_channels" in error for error in errors)
+
+
+def test_invalid_audio_capture_backend_is_rejected(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("audio:\n  capture_backend: blocking-library\n")
+    errors = validate_config(load_config(str(config_file)))
+    assert any("capture_backend" in error for error in errors)

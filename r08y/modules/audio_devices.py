@@ -1,13 +1,16 @@
-"""Logical audio-device discovery for PortAudio and PipeWire."""
+"""Logical audio-device discovery and bounded ALSA capture."""
 
 from __future__ import annotations
 
 import logging
+import os
 import re
+import select
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,107 @@ class AlsaResolver:
 
     def resolve(self, requested_name: str) -> Optional[AlsaCaptureDevice]:
         return find_alsa_capture(self.list_capture_devices(), requested_name)
+
+
+class AlsaCaptureStream:
+    """Read raw PCM from ``arecord`` with a deadline and stoppable process."""
+
+    def __init__(
+        self,
+        hardware_id: str,
+        sample_rate: int,
+        channels: int,
+        *,
+        read_timeout: float = 2.0,
+        process_factory: Callable = subprocess.Popen,
+        selector: Callable = select.select,
+        reader: Callable = os.read,
+        clock: Callable = time.monotonic,
+    ):
+        self.hardware_id = hardware_id
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.read_timeout = read_timeout
+        self._selector = selector
+        self._reader = reader
+        self._clock = clock
+        command = [
+            "arecord",
+            "-q",
+            "-D",
+            hardware_id,
+            "-f",
+            "S16_LE",
+            "-r",
+            str(sample_rate),
+            "-c",
+            str(channels),
+            "-t",
+            "raw",
+        ]
+        self._process = process_factory(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        if self._process.stdout is None:
+            self.stop_stream()
+            raise OSError("arecord did not provide an audio stream")
+
+    def is_active(self) -> bool:
+        return self._process.poll() is None
+
+    def _exit_detail(self) -> str:
+        if self._process.poll() is None:
+            try:
+                self._process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                return "arecord stopped before returning audio"
+        if self._process.stderr is None:
+            return "arecord stopped before returning audio"
+        detail = self._process.stderr.read().decode(errors="replace").strip()
+        return detail or f"arecord exited with status {self._process.returncode}"
+
+    def read(self, frames: int, exception_on_overflow: bool = False) -> bytes:
+        del exception_on_overflow
+        expected = frames * self.channels * 2
+        captured = bytearray()
+        deadline = self._clock() + self.read_timeout
+        descriptor = self._process.stdout.fileno()
+
+        while len(captured) < expected:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"ALSA capture timed out after {self.read_timeout:.1f}s without a full audio chunk"
+                )
+            ready, _, _ = self._selector([descriptor], [], [], remaining)
+            if not ready:
+                raise TimeoutError(
+                    f"ALSA capture timed out after {self.read_timeout:.1f}s without audio data"
+                )
+            chunk = self._reader(descriptor, expected - len(captured))
+            if not chunk:
+                raise OSError(self._exit_detail())
+            captured.extend(chunk)
+        return bytes(captured)
+
+    def stop_stream(self) -> None:
+        if self._process.poll() is not None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=1)
+
+    def close(self) -> None:
+        self.stop_stream()
+        for pipe in (self._process.stdout, self._process.stderr):
+            if pipe is not None:
+                pipe.close()
 
 
 def parse_wpctl_status(output: str) -> List[AudioDevice]:

@@ -15,7 +15,11 @@ from enum import Enum, auto
 from typing import Optional
 
 from r08y.config import AudioConfig, WakeWordConfig
-from r08y.modules.audio_devices import AlsaResolver, find_portaudio_input
+from r08y.modules.audio_devices import (
+    AlsaCaptureStream,
+    AlsaResolver,
+    find_portaudio_input,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +35,7 @@ try:
     PYAUDIO_AVAILABLE = True
 except ImportError:
     PYAUDIO_AVAILABLE = False
-    logger.warning("PyAudio not installed; voice input disabled")
+    logger.warning("PyAudio not installed; non-ALSA microphone fallback disabled")
 
 try:
     import pvporcupine
@@ -64,6 +68,7 @@ class VoiceInput:
         self._input_frames_per_buffer = audio_config.chunk_size
         self.device_name: Optional[str] = None
         self.alsa_hardware_id: Optional[str] = None
+        self.capture_backend = "none"
         self.capture_status = "not-tested"
         self.capture_detail = "startup capture self-test has not run"
         self.requires_usb_reseat = False
@@ -79,8 +84,9 @@ class VoiceInput:
         is_io_error = (
             isinstance(exc, OSError) and exc.errno in {errno.EIO, -errno.EIO}
         ) or "input/output error" in str(exc).casefold()
+        is_no_data = isinstance(exc, TimeoutError) or "no audio data" in str(exc).casefold()
         self.requires_usb_reseat = self._is_xvf3800() and (
-            is_io_error or (during_startup and self._stream is not None)
+            is_io_error or (during_startup and is_no_data)
         )
         if self.requires_usb_reseat:
             self.capture_detail = f"{XVF3800_USB_RESEAT} ALSA detail: {exc}"
@@ -108,18 +114,69 @@ class VoiceInput:
                 self._pa = None
 
     def _init_audio(self) -> bool:
-        if not PYAUDIO_AVAILABLE:
-            self.capture_status = "unavailable"
-            self.capture_detail = "PyAudio is not installed"
-            return False
         try:
-            self._pa = pyaudio.PyAudio()
-            aliases = []
+            alsa_device = None
             if self._audio_config.device_index is None and self._audio_config.device_name:
                 alsa_device = AlsaResolver().resolve(self._audio_config.device_name)
                 if alsa_device:
                     self.alsa_hardware_id = alsa_device.hardware_id
-                    aliases.append(alsa_device.hardware_id)
+
+            requested_backend = self._audio_config.capture_backend
+            use_alsa = requested_backend == "alsa" or (
+                requested_backend == "auto"
+                and alsa_device is not None
+                and "xvf3800" in (
+                    f"{self._audio_config.device_name} {alsa_device.display_name}"
+                ).casefold()
+            )
+            if use_alsa:
+                if alsa_device is None:
+                    raise LookupError(
+                        f"ALSA capture device matching '{self._audio_config.device_name}' not found"
+                    )
+                self._input_rate = (
+                    self._audio_config.hardware_sample_rate
+                    or self._audio_config.sample_rate
+                )
+                self._input_channels = (
+                    self._audio_config.hardware_channels
+                    or self._audio_config.channels
+                )
+                self._input_frames_per_buffer = max(
+                    1,
+                    round(
+                        self._audio_config.chunk_size
+                        * self._input_rate
+                        / self._audio_config.sample_rate
+                    ),
+                )
+                self._stream = AlsaCaptureStream(
+                    alsa_device.hardware_id,
+                    self._input_rate,
+                    self._input_channels,
+                )
+                self.device_name = alsa_device.display_name
+                self.capture_backend = "alsa"
+                logger.info(
+                    "Microphone opened: '%s' (ALSA=%s, backend=arecord, "
+                    "hardware=S16_LE/%dHz/%dch, processing=S16_LE/%dHz/%dch)",
+                    self.device_name,
+                    self.alsa_hardware_id,
+                    self._input_rate,
+                    self._input_channels,
+                    self._audio_config.sample_rate,
+                    self._audio_config.channels,
+                )
+                return True
+
+            if not PYAUDIO_AVAILABLE:
+                raise RuntimeError(
+                    "PyAudio is not installed and no matching ALSA capture backend was selected"
+                )
+            self._pa = pyaudio.PyAudio()
+            aliases = []
+            if alsa_device:
+                aliases.append(alsa_device.hardware_id)
             device_index, info = find_portaudio_input(
                 self._pa,
                 requested_name=self._audio_config.device_name,
@@ -128,6 +185,7 @@ class VoiceInput:
                 requested_aliases=aliases,
             )
             self.device_name = str(info.get("name", device_index))
+            self.capture_backend = "pyaudio"
 
             attempts = [(
                 self._audio_config.hardware_sample_rate or self._audio_config.sample_rate,
@@ -165,7 +223,7 @@ class VoiceInput:
                 raise RuntimeError(f"Unable to open selected microphone: {last_error}")
 
             logger.info(
-                "Microphone opened: '%s' (discovered index=%s, ALSA=%s, "
+                "Microphone opened: '%s' (discovered index=%s, ALSA=%s, backend=PyAudio, "
                 "hardware=S16_LE/%dHz/%dch, "
                 "processing=S16_LE/%dHz/%dch)",
                 self.device_name,
@@ -206,6 +264,7 @@ class VoiceInput:
         self.capture_status = "pass"
         self.capture_detail = (
             f"{self.device_name} ({self.alsa_hardware_id or 'name match'}): "
+            f"{self.capture_backend} backend; "
             f"S16_LE {self._input_rate} Hz/{self._input_channels} ch "
             f"capture passed; processing at {self._audio_config.sample_rate} Hz/"
             f"{self._audio_config.channels} ch"
@@ -401,6 +460,6 @@ class VoiceInput:
         self._close_audio()
         if self._porcupine:
             self._porcupine.delete()
-        self._executor.shutdown(wait=False)
+        self._executor.shutdown(wait=False, cancel_futures=True)
         self.available = False
         logger.info("Voice input stopped")

@@ -138,6 +138,7 @@ audio:
   device_index: null
   device_name: XVF3800
   require_device_match: true
+  capture_backend: auto
   hardware_sample_rate: 16000
   hardware_channels: 2
 
@@ -207,7 +208,7 @@ Confirm all of the following:
 
 If the tone command passes but nothing is audible, inspect `wpctl status -n` and XVF3800 playback volume. Do not reflash firmware during this first pass; headphone playback already proved the USB output path.
 
-R08Y opens the XVF3800 at its verified native `S16_LE`, two-channel, 16 kHz capture format, then downmixes to 16 kHz mono for the wake word and STT. The startup self-test reads a real chunk before declaring the microphone ready.
+R08Y resolves the XVF3800 with `arecord -l`, then opens that current card/device at its verified native `S16_LE`, two-channel, 16 kHz capture format. It does not store card 3 as a fixed setting. Capture reads have a hard deadline, and audio is downmixed to 16 kHz mono for the wake word and STT. Other USB microphones retain the PyAudio fallback.
 
 If `microphone_capture` reports the known immediate ALSA I/O error, stop retrying and reseat USB:
 

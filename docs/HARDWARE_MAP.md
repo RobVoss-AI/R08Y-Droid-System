@@ -34,7 +34,7 @@ These modules received only compatibility or lifecycle wiring where required. Th
 | Camera | USB webcam only | Picamera2 or OpenCV/V4L2, selectable device path, reconnect, flips. |
 | Pan/tilt | Generic PCA9685 or guessed GPIO fallback | Official Freenove servo API; GPIO is allowed only with explicit pins. |
 | Distance | Generic HC-SR04 with hardcoded pins in a skill | Shared sensor abstraction using the official Freenove ultrasonic API. |
-| Voice input | Fixed numeric audio index and format | Strict device-name selection; XVF3800 S16_LE/16 kHz/stereo capture; downmix/resample; startup read with explicit USB-reseat diagnosis. |
+| Voice input | Fixed numeric audio index and format | Strict device-name selection; bounded XVF3800 `arecord` capture at S16_LE/16 kHz/stereo; downmix/resample; PyAudio fallback; startup read with explicit USB-reseat diagnosis. |
 | Speech output | Generic default player/device | Name-resolved XVF3800 PipeWire sink selection with direct `pw-play --target` routing and compatible playback conversion. |
 | Main runtime | Vision and voice only | Sensor, mobility, component health, and graceful-stop orchestration. |
 | Service | Hardcoded account/path behavior | Installer-rendered user and group, protected environment file, config preflight, signal-aware shutdown. |
@@ -46,7 +46,7 @@ These modules received only compatibility or lifecycle wiring where required. Th
 - `r08y/hardware/freenove.py`: verified upstream module discovery and loading.
 - `r08y/modules/sensors.py`: distance and light abstractions with disabled and mock implementations.
 - `r08y/modules/mobility.py`: mecanum mixing, wheel calibration, clearance guard, deadman watchdog, emergency stop, and fake controller.
-- `r08y/modules/audio_devices.py`: named ALSA, PortAudio, and PipeWire resolution.
+- `r08y/modules/audio_devices.py`: named, timeout-protected ALSA capture plus PortAudio fallback and PipeWire resolution.
 - `r08y/modules/health.py`: component-level startup report.
 - `r08y/diagnostics.py`: passive discovery and opt-in physical exercises.
 - `r08y/skills/mobility_control`: short voice-triggered mecanum movements.
