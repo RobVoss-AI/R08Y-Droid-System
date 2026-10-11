@@ -54,6 +54,7 @@ tracker:
   pid_ki: 0.01
   pid_kd: 0.02
   dead_zone: 0.05
+  patrol_enabled: false    # Full-range scanning must be explicitly enabled
   patrol_speed: 30
   no_face_timeout: 5.0
 

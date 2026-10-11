@@ -19,6 +19,7 @@ def test_example_config_is_valid():
     assert "lightly playful droid personality" in config.ai.spoken_style
     assert config.expression.enabled is True
     assert config.expression.max_step_degrees == 3.0
+    assert config.tracker.patrol_enabled is False
     assert config.wake_word.phrase == "ROBY"
     assert config.wake_word.keyword_path == "/opt/r08y/wake_words/roby.ppn"
     assert config.wake_word.allow_rms_fallback is False

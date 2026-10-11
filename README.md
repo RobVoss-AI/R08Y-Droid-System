@@ -53,6 +53,7 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 - Custom wake-word models and API keys are local deployment assets. The repository ignores `.ppn` files, and secrets stay in `/etc/r08y/r08y.env`.
 - One expression controller owns every runtime pan/tilt write. Face tracking and skills submit bounded gaze targets or named gestures to its queue.
 - Conversational states add restrained idle, listening, thinking, and speaking motion. `--expression-test` exercises only pan/tilt and never initializes wheel movement.
+- No-face patrol scanning is disabled by default. After losing a face, R08Y returns its gaze to center and retains only the restrained idle sway; full-range scanning requires `tracker.patrol_enabled: true`.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
 - `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
 - Negative `mobility.wheel_scale` values reverse individual wheels. Confirm direction only with all four wheels clear of the surface.

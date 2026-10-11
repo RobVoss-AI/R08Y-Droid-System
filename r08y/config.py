@@ -69,6 +69,7 @@ class TrackerConfig:
     pid_ki: float = 0.01
     pid_kd: float = 0.02
     dead_zone: float = 0.05
+    patrol_enabled: bool = False
     patrol_speed: float = 30.0
     no_face_timeout: float = 5.0
 
