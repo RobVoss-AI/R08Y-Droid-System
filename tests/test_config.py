@@ -136,3 +136,18 @@ def test_invalid_wake_word_configuration_is_rejected(tmp_path):
     assert any("engine" in error for error in errors)
     assert any("phrase" in error for error in errors)
     assert any("sensitivity" in error for error in errors)
+
+
+def test_preserved_null_wake_model_does_not_block_service_start(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "wake_word:\n"
+        "  engine: porcupine\n"
+        "  phrase: ROBY\n"
+        "  keyword_path: null\n"
+        "  sensitivity: 0.5\n"
+    )
+
+    errors = validate_config(load_config(str(config_file)))
+
+    assert not any("keyword_path" in error for error in errors)

@@ -323,9 +323,10 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("wake_word phrase must not be empty")
     if not 0 <= config.wake_word.sensitivity <= 1:
         errors.append("wake_word sensitivity must be between 0 and 1")
-    if config.wake_word.engine == "porcupine" and (
-        not config.wake_word.keyword_path
-        or not config.wake_word.keyword_path.casefold().endswith(".ppn")
+    if (
+        config.wake_word.engine == "porcupine"
+        and config.wake_word.keyword_path
+        and not config.wake_word.keyword_path.casefold().endswith(".ppn")
     ):
         errors.append("wake_word keyword_path must point to a custom .ppn model")
     if not re.fullmatch(r"[+-]\d+%", config.tts.rate):
