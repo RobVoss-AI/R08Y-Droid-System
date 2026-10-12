@@ -510,6 +510,7 @@ async def run_interaction_test(
             "Got it. We'll take it one step at a time.",
         )
         speech_completed = True
+        failure_detail = None
         for line in lines:
             emit(f"R08Y: {line}")
 
@@ -517,10 +518,15 @@ async def run_interaction_test(
                 await expression.set_interaction_state(InteractionState.SPEAKING)
                 await interaction.queue_response_gesture(response, expression)
 
-            speech_completed = await tts.speak_and_wait(
+            played = await tts.speak_and_wait(
                 line,
                 on_playback_start=begin_body_language,
-            ) and speech_completed
+            )
+            if not played:
+                speech_completed = False
+                failure_detail = getattr(tts, "last_error", None)
+                emit("STOP: Speech synthesis failed. Remaining audition lines were skipped.")
+                break
         await expression.set_interaction_state(InteractionState.IDLE)
         await expression.home()
 
@@ -533,7 +539,10 @@ async def run_interaction_test(
                     "acknowledgement cue and three coordinated responses completed; "
                     "confirm voice and movement felt natural"
                     if completed
-                    else "one or more acknowledgement, speech, or motion cues failed"
+                    else (
+                        failure_detail
+                        or "one or more acknowledgement, speech, or motion cues failed"
+                    )
                 ),
             )
         )

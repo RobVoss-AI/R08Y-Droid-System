@@ -308,6 +308,24 @@ This command starts only the speaker and pan/tilt. It plays the quiet ROBY ackno
 
 Adjust only `interaction.cue_gain` if the acknowledgement cue needs tuning. Keep it between `0.0` and `0.5`; the example value is `0.14`.
 
+If speech synthesis reports HTTP 403, verify the Pi clock before changing the voice or audio configuration:
+
+```bash
+timedatectl status
+date -u
+/opt/r08y/venv/bin/edge-tts --version
+```
+
+`System clock synchronized` must be `yes`, and the UTC time must be current. Edge TTS signs requests from the current time, so a stale Raspberry Pi clock can make an otherwise valid request fail authorization. If the clock is wrong:
+
+```bash
+sudo timedatectl set-ntp true
+sudo systemctl restart systemd-timesyncd
+timedatectl status
+```
+
+Then rerun `--speech-test` before the full interaction audition. If the clock is synchronized, Edge TTS is `7.2.8`, and HTTP 403 continues, treat it as an upstream service or network rejection rather than an XVF3800 failure.
+
 ### Gate G: camera, pan/tilt, sensors, microphone, and speaker
 
 Keep the wheels raised:

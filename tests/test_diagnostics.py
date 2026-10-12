@@ -292,6 +292,7 @@ def test_interaction_test_coordinates_cue_speech_and_expression_without_mobility
     class FakeTTS:
         available = False
         output_detail = "XVF3800 selected"
+        last_error = None
 
         def __init__(self):
             self.lines = []
@@ -350,3 +351,72 @@ def test_interaction_test_coordinates_cue_speech_and_expression_without_mobility
     assert [(result.name, result.status) for result in results] == [
         ("interaction_audition", "pass")
     ]
+
+
+def test_interaction_test_stops_after_first_synthesis_failure():
+    class FakeServo:
+        available = False
+
+        async def start(self):
+            self.available = True
+
+        async def stop(self):
+            self.available = False
+
+    class FakeExpression:
+        available = False
+
+        async def start(self):
+            self.available = True
+
+        async def home(self):
+            return True
+
+        async def set_interaction_state(self, _state):
+            return None
+
+        async def stop(self):
+            self.available = False
+
+    class FakeTTS:
+        available = False
+        output_detail = "XVF3800 selected"
+        last_error = "Edge TTS rejected synthesis with HTTP 403."
+
+        def __init__(self):
+            self.attempts = 0
+
+        async def start(self):
+            self.available = True
+
+        async def speak_and_wait(self, _line, *, on_playback_start=None):
+            self.attempts += 1
+            return False
+
+        async def stop(self):
+            self.available = False
+
+    class FakeInteraction:
+        async def acknowledge(self, _tts, _expression):
+            return True
+
+        async def queue_response_gesture(self, _line, _expression):
+            return None
+
+    tts = FakeTTS()
+    messages = []
+    results = asyncio.run(
+        run_interaction_test(
+            R08YConfig(),
+            servo_factory=lambda _config: FakeServo(),
+            expression_factory=lambda *_args: FakeExpression(),
+            tts_factory=lambda _config: tts,
+            interaction_factory=lambda _config: FakeInteraction(),
+            emit=messages.append,
+        )
+    )
+
+    assert tts.attempts == 1
+    assert any(message.startswith("STOP:") for message in messages)
+    assert results[0].status == "fail"
+    assert "HTTP 403" in results[0].detail

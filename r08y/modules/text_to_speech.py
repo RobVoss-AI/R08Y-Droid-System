@@ -33,6 +33,20 @@ class _SpeechRequest:
     on_playback_start: Optional[Callable[[], Awaitable[None]]] = None
 
 
+def _synthesis_error_detail(exc: Exception) -> str:
+    """Return an actionable message without logging provider request tokens."""
+    status = getattr(exc, "status", None)
+    if status == 403:
+        return (
+            "Edge TTS rejected synthesis with HTTP 403. Confirm the Pi UTC clock "
+            "is synchronized; if it is correct, the upstream service may be "
+            "temporarily rejecting this network."
+        )
+    if status is not None:
+        return f"Edge TTS returned HTTP {status}."
+    return f"{type(exc).__name__}: {exc}"
+
+
 class TextToSpeech:
     """Queue Edge TTS speech and route playback through the configured sink."""
 
@@ -161,8 +175,11 @@ class TextToSpeech:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self._last_error = f"{type(exc).__name__}: {exc}"
-                logger.exception("TTS playback error")
+                self._last_error = _synthesis_error_detail(exc)
+                if getattr(exc, "status", None) is not None:
+                    logger.error("TTS playback error: %s", self._last_error)
+                else:
+                    logger.exception("TTS playback error")
             finally:
                 if request is not None:
                     self._queue.task_done()

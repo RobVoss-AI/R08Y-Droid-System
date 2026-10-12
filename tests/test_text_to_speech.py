@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from r08y.config import TTSConfig
 from r08y.modules.audio_devices import AudioDevice
 from r08y.modules import text_to_speech
-from r08y.modules.text_to_speech import TextToSpeech
+from r08y.modules.text_to_speech import TextToSpeech, _synthesis_error_detail
 
 
 class MissingSinkResolver:
@@ -147,3 +147,17 @@ def test_playback_start_callback_runs_after_synthesis_before_audio(monkeypatch):
     asyncio.run(run())
 
     assert events == ["synthesized", "gesture", "audio"]
+
+
+def test_http_403_error_hides_signed_url_and_reports_clock_check():
+    class Forbidden(Exception):
+        status = 403
+
+        def __str__(self):
+            return "wss://example.invalid?Sec-MS-GEC=secret-token"
+
+    detail = _synthesis_error_detail(Forbidden())
+
+    assert "HTTP 403" in detail
+    assert "UTC clock" in detail
+    assert "secret-token" not in detail
