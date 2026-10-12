@@ -41,6 +41,11 @@ def main():
         help="Run a guided pan/tilt expression test; wheels remain inactive",
     )
     parser.add_argument(
+        "--interaction-test",
+        action="store_true",
+        help="Audition coordinated speech and pan/tilt body language; wheels remain inactive",
+    )
+    parser.add_argument(
         "--wake-word-test",
         action="store_true",
         help="Listen for the configured custom wake word without starting other hardware",
@@ -106,6 +111,7 @@ def main():
             args.audio_test,
             args.speech_test,
             args.expression_test,
+            args.interaction_test,
             args.wake_word_test,
             args.smoke_test,
         )
@@ -113,12 +119,13 @@ def main():
     if selected_test_modes > 1:
         parser.error(
             "--audio-test, --speech-test, --wake-word-test, --expression-test, "
-            "and --smoke-test are separate test modes"
+            "--interaction-test, and --smoke-test are separate test modes"
         )
     if (
         args.audio_test
         or args.speech_test
         or args.expression_test
+        or args.interaction_test
         or args.wake_word_test
     ) and (
         args.exercise_hardware or args.exercise_mobility
@@ -183,6 +190,21 @@ def main():
             print("\nR08Y expression test stopped. Returning pan/tilt home.", flush=True)
             os._exit(130)
         print_smoke_results(results, heading="R08Y guided expression test")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
+    if args.interaction_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_interaction_test
+
+        try:
+            results = asyncio.run(run_interaction_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y interaction audition stopped. Returning pan/tilt home.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y guided interaction audition")
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 
     if args.exercise_mobility and not args.confirm_wheels_raised:

@@ -295,7 +295,20 @@ cd /opt/r08y
 
 This command does not initialize mobility. R08Y performs seven bounded gestures, reports each one before it begins, and returns pan/tilt home. Confirm that movement is smooth, remains inside the physical clearance, and does not bind. Press Ctrl-C to cancel if anything catches or strains.
 
-### Gate F: camera, pan/tilt, sensors, microphone, and speaker
+### Gate F: coordinated interaction audition
+
+Keep the service stopped and the pan/tilt assembly clear:
+
+```bash
+cd /opt/r08y
+./venv/bin/python -m r08y --config config.yaml --interaction-test
+```
+
+This command starts only the speaker and pan/tilt. It plays the quiet ROBY acknowledgement cue, then speaks three short lines with restrained greeting, curious, and pleased gestures. Confirm that the cue is audible without being intrusive, speech remains clear, and movement supports the words without distracting from them. The wheels never initialize.
+
+Adjust only `interaction.cue_gain` if the acknowledgement cue needs tuning. Keep it between `0.0` and `0.5`; the example value is `0.14`.
+
+### Gate G: camera, pan/tilt, sensors, microphone, and speaker
 
 Keep the wheels raised:
 
@@ -315,7 +328,7 @@ Confirm all of the following:
 
 The command says not to speak during startup, prints `READY` before its two-second microphone sample, and tells you when the sample is complete. Pressing Ctrl-C exits the diagnostic process immediately if a native camera operation is stuck.
 
-### Gate G: guarded motor exercise
+### Gate H: guarded motor exercise
 
 Verify again that every wheel is clear. Then run:
 
@@ -350,11 +363,12 @@ Expected first-run behavior:
 2. R08Y says, “R08Y online. Ready when you are.”
 3. Saying “ROBY” starts a voice turn.
 4. The camera tracks a face through the expression controller.
-5. R08Y makes a small acknowledgement after the wake word, holds still while listening, shifts gently while thinking, and adds a restrained speaking bob.
-6. “How far?” reports ultrasonic distance.
-7. “Check light sensors” reports both sensor voltages.
-8. “Move forward” runs briefly only when valid clearance is available.
-9. “Stop wheels” sends an immediate zero-duty command.
+5. R08Y plays a quiet acknowledgement cue and makes a small nod after the wake word.
+6. Each response uses no more than one meaning-aware gesture while the restrained speaking bob continues.
+7. “How far?” reports ultrasonic distance.
+8. “Check light sensors” reports both sensor voltages.
+9. “Move forward” runs briefly only when valid clearance is available.
+10. “Stop wheels” sends an immediate zero-duty command.
 
 For the shortest live audio acceptance test, keep a second terminal on the log:
 
@@ -362,7 +376,7 @@ For the shortest live audio acceptance test, keep a second terminal on the log:
 journalctl -u r08y -f
 ```
 
-Listen for “R08Y online. Ready when you are.” Say “ROBY” by itself. Pause while R08Y makes its small acknowledgement motion, then say, “Tell me your name in one sentence.” The log should show `Wake word 'ROBY' detected`, a non-empty transcription, and an AI response. The response should play through the XVF3800 speaker.
+Listen for “R08Y online. Ready when you are.” Say “ROBY” by itself. Wait for the short rising cue, then say, “Tell me your name in one sentence.” The log should show `Wake word 'ROBY' detected`, a non-empty transcription, and an AI response. The response should play through the XVF3800 speaker with one restrained gesture.
 
 Useful service controls:
 

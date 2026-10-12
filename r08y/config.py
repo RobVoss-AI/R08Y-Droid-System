@@ -88,6 +88,15 @@ class ExpressionConfig:
 
 
 @dataclass
+class InteractionConfig:
+    enabled: bool = True
+    acknowledgement_cue: bool = True
+    acknowledgement_gesture: bool = True
+    response_gestures: bool = True
+    cue_gain: float = 0.14
+
+
+@dataclass
 class AudioConfig:
     sample_rate: int = 16000
     channels: int = 1
@@ -128,17 +137,24 @@ class AIConfig:
     model: str = "claude-sonnet-5-5"
     max_history_turns: int = 20
     system_prompt: str = (
-        "You are R08Y, a friendly and helpful droid assistant. You have a physical "
-        "body with a camera and can see the people you talk to. You recognize faces "
-        "and remember conversations. Keep responses conversational and concise — "
-        "you're speaking out loud, not writing an essay."
+        "You are R08Y, an embodied droid companion. You have a camera, recognize "
+        "faces, and remember conversations. Never claim a physical action succeeded "
+        "without hardware confirmation."
+    )
+    personality_profile: str = (
+        "Curious, observant, patient, and quietly playful. Treat people as "
+        "collaborators and build continuity from earlier conversation. Respond to a "
+        "person's emotion before solving the problem when that would help. Show "
+        "interest through specific observations and useful follow-up questions. Never "
+        "pretend to have human experiences."
     )
     spoken_style: str = (
         "Speak with calm warmth and a lightly playful droid personality. Use natural "
         "contractions and plain spoken language. Keep most replies to one or two short "
-        "sentences and under 30 words when practical. Help first, then add at most one "
-        "understated witty aside when it fits. Avoid filler, monologues, sarcasm, and "
-        "theatrical robot catchphrases."
+        "sentences and under 30 words when practical. Acknowledge what the person meant "
+        "when it matters. Use names sparingly and ask at most one natural follow-up "
+        "question. Add one understated witty aside only when it fits. Never narrate "
+        "your gestures. Avoid filler, monologues, sarcasm, and robot catchphrases."
     )
     conversations_db_path: str = "data/conversations.db"
 
@@ -223,6 +239,7 @@ class R08YConfig:
     servos: ServoConfig = field(default_factory=ServoConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     expression: ExpressionConfig = field(default_factory=ExpressionConfig)
+    interaction: InteractionConfig = field(default_factory=InteractionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     stt: STTConfig = field(default_factory=STTConfig)
@@ -279,6 +296,7 @@ def load_config(config_path: str = "config.yaml") -> R08YConfig:
         servos=_merge_dict_to_dataclass(ServoConfig, data.get("servos")),
         tracker=_merge_dict_to_dataclass(TrackerConfig, data.get("tracker")),
         expression=_merge_dict_to_dataclass(ExpressionConfig, data.get("expression")),
+        interaction=_merge_dict_to_dataclass(InteractionConfig, data.get("interaction")),
         audio=_merge_dict_to_dataclass(AudioConfig, data.get("audio")),
         wake_word=_merge_dict_to_dataclass(WakeWordConfig, data.get("wake_word")),
         stt=_merge_dict_to_dataclass(STTConfig, data.get("stt")),
@@ -357,6 +375,8 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("expression ambient movement must be between 0 and 10 degrees")
     if not 1 <= config.expression.queue_size <= 32:
         errors.append("expression queue_size must be between 1 and 32")
+    if not 0 <= config.interaction.cue_gain <= 0.5:
+        errors.append("interaction cue_gain must be between 0 and 0.5")
     if config.distance.driver == "gpio" and (
         config.distance.trigger_pin is None or config.distance.echo_pin is None
     ):

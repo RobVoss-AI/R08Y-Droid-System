@@ -4,6 +4,7 @@ from r08y.config import R08YConfig
 from r08y.diagnostics import (
     run_audio_test,
     run_expression_test,
+    run_interaction_test,
     run_speech_test,
     run_wake_word_test,
 )
@@ -254,4 +255,98 @@ def test_expression_test_runs_named_sequence_without_mobility():
     assert servo.stopped
     assert [(result.name, result.status) for result in results] == [
         ("expression_sequence", "pass")
+    ]
+
+
+def test_interaction_test_coordinates_cue_speech_and_expression_without_mobility():
+    class FakeServo:
+        available = False
+
+        async def start(self):
+            self.available = True
+
+        async def stop(self):
+            self.available = False
+
+    class FakeExpression:
+        available = False
+
+        def __init__(self, *_args):
+            self.states = []
+            self.home_count = 0
+            self.stopped = False
+
+        async def start(self):
+            self.available = True
+
+        async def set_interaction_state(self, state):
+            self.states.append(state.value)
+
+        async def home(self):
+            self.home_count += 1
+            return True
+
+        async def stop(self):
+            self.stopped = True
+
+    class FakeTTS:
+        available = False
+        output_detail = "XVF3800 selected"
+
+        def __init__(self):
+            self.lines = []
+            self.stopped = False
+
+        async def start(self):
+            self.available = True
+
+        async def speak_and_wait(self, line, *, on_playback_start=None):
+            if on_playback_start is not None:
+                await on_playback_start()
+            self.lines.append(line)
+            return True
+
+        async def stop(self):
+            self.stopped = True
+
+    class FakeInteraction:
+        def __init__(self, _config):
+            self.acknowledged = False
+            self.responses = []
+
+        async def acknowledge(self, _tts, _expression):
+            self.acknowledged = True
+            return True
+
+        async def queue_response_gesture(self, line, _expression):
+            self.responses.append(line)
+            return "greet"
+
+    servo = FakeServo()
+    expression = FakeExpression()
+    tts = FakeTTS()
+    interaction = FakeInteraction(None)
+    messages = []
+
+    results = asyncio.run(
+        run_interaction_test(
+            R08YConfig(),
+            servo_factory=lambda _config: servo,
+            expression_factory=lambda *_args: expression,
+            tts_factory=lambda _config: tts,
+            interaction_factory=lambda _config: interaction,
+            emit=messages.append,
+        )
+    )
+
+    assert "wheels will not move" in messages[0]
+    assert interaction.acknowledged
+    assert interaction.responses == tts.lines
+    assert len(tts.lines) == 3
+    assert expression.states == ["speaking", "speaking", "speaking", "idle"]
+    assert expression.home_count == 2
+    assert expression.stopped
+    assert tts.stopped
+    assert [(result.name, result.status) for result in results] == [
+        ("interaction_audition", "pass")
     ]

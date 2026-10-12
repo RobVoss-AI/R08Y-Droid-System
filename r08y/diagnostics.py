@@ -443,6 +443,114 @@ async def run_expression_test(
     return results
 
 
+async def run_interaction_test(
+    config: R08YConfig,
+    *,
+    servo_factory=None,
+    expression_factory=None,
+    tts_factory=None,
+    interaction_factory=None,
+    emit: Callable[[str], None] = print,
+) -> List[SmokeResult]:
+    """Audition coordinated voice and bounded pan/tilt body language."""
+    from r08y.modules.expression_controller import (
+        ExpressionController,
+        InteractionState,
+    )
+    from r08y.modules.interaction import InteractionDirector
+    from r08y.modules.servo_controller import create_servo_controller
+    from r08y.modules.text_to_speech import TextToSpeech
+
+    servo_factory = servo_factory or create_servo_controller
+    expression_factory = expression_factory or ExpressionController
+    tts_factory = tts_factory or TextToSpeech
+    interaction_factory = interaction_factory or InteractionDirector
+    servo = servo_factory(config.servos)
+    expression = expression_factory(servo, config.servos, config.expression)
+    tts = tts_factory(config.tts)
+    interaction = interaction_factory(config.interaction)
+    results: List[SmokeResult] = []
+
+    emit("R08Y interaction audition starting. The wheels will not move.")
+    emit("CLEARANCE: Keep hands and cables clear of the camera pan/tilt assembly.")
+    try:
+        await asyncio.gather(servo.start(), tts.start())
+        if not servo.available:
+            return [
+                SmokeResult(
+                    "interaction_audition",
+                    "fail",
+                    f"pan/tilt unavailable: {type(servo).__name__}",
+                )
+            ]
+        if not tts.available:
+            return [
+                SmokeResult(
+                    "interaction_audition",
+                    "fail",
+                    getattr(tts, "output_detail", "speech unavailable"),
+                )
+            ]
+        await expression.start()
+        if not expression.available:
+            return [
+                SmokeResult(
+                    "interaction_audition",
+                    "fail",
+                    "expression controller did not start",
+                )
+            ]
+
+        await expression.home()
+        emit("LISTENING: A quiet cue and acknowledgement gesture will play.")
+        cue_completed = await interaction.acknowledge(tts, expression)
+        lines = (
+            "Hi, Rob. I'm here and ready.",
+            "Would you like to try something curious?",
+            "Got it. We'll take it one step at a time.",
+        )
+        speech_completed = True
+        for line in lines:
+            emit(f"R08Y: {line}")
+
+            async def begin_body_language(response: str = line) -> None:
+                await expression.set_interaction_state(InteractionState.SPEAKING)
+                await interaction.queue_response_gesture(response, expression)
+
+            speech_completed = await tts.speak_and_wait(
+                line,
+                on_playback_start=begin_body_language,
+            ) and speech_completed
+        await expression.set_interaction_state(InteractionState.IDLE)
+        await expression.home()
+
+        completed = cue_completed and speech_completed
+        results.append(
+            _result(
+                "interaction_audition",
+                completed,
+                (
+                    "acknowledgement cue and three coordinated responses completed; "
+                    "confirm voice and movement felt natural"
+                    if completed
+                    else "one or more acknowledgement, speech, or motion cues failed"
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(
+            SmokeResult(
+                "interaction_audition", "fail", f"{type(exc).__name__}: {exc}"
+            )
+        )
+    finally:
+        try:
+            await expression.stop()
+        finally:
+            await asyncio.gather(servo.stop(), tts.stop(), return_exceptions=True)
+    return results
+
+
 async def _exercise_hardware(config: R08YConfig, exercise_mobility: bool) -> List[SmokeResult]:
     # Imports are deferred so passive diagnostics can still explain missing Pi packages.
     from r08y.modules.camera import CameraCapture

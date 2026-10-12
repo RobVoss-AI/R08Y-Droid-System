@@ -107,5 +107,6 @@ echo "5. Guided audio: ./venv/bin/python -m r08y --config config.yaml --audio-te
 echo "6. Speech audition: ./venv/bin/python -m r08y --config config.yaml --speech-test"
 echo "7. Wake word: ./venv/bin/python -m r08y --config config.yaml --wake-word-test"
 echo "8. Expression: ./venv/bin/python -m r08y --config config.yaml --expression-test"
-echo "9. Start: sudo systemctl start r08y"
-echo "10. Logs: journalctl -u r08y -f"
+echo "9. Interaction: ./venv/bin/python -m r08y --config config.yaml --interaction-test"
+echo "10. Start: sudo systemctl start r08y"
+echo "11. Logs: journalctl -u r08y -f"

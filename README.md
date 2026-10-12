@@ -4,7 +4,7 @@ R08Y turns a Raspberry Pi 4B and Freenove 4WD mecanum chassis into a voice-contr
 
 ## Status
 
-In development. XVF3800 capture and speaker playback have been verified on the Pi. The ROBY wake-word path, expression kernel, and mock-hardware suite are desktop-verified. Live acceptance still remains for ROBY detection, pan/tilt expression, the integrated R08Y voice turn, motor direction, and camera selection.
+In development. XVF3800 capture and speaker playback have been verified on the Pi. The ROBY wake-word path, interaction director, expression kernel, and mock-hardware suite are desktop-verified. Live acceptance still remains for ROBY detection, coordinated voice/body-language interaction, motor direction, and camera selection.
 
 ## Stack
 
@@ -53,6 +53,7 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 - Custom wake-word models and API keys are local deployment assets. The repository ignores `.ppn` files, and secrets stay in `/etc/r08y/r08y.env`.
 - One expression controller owns every runtime pan/tilt write. Face tracking and skills submit bounded gaze targets or named gestures to its queue.
 - Conversational states add restrained idle, listening, thinking, and speaking motion. `--expression-test` exercises only pan/tilt and never initializes wheel movement.
+- The interaction director adds a quiet acknowledgement cue after ROBY, chooses at most one meaning-aware gesture per response, and leaves neutral replies unembellished. `--interaction-test` auditions the speaker and pan/tilt together without initializing mobility.
 - No-face patrol scanning is disabled by default. After losing a face, R08Y returns its gaze to center and retains only the restrained idle sway; full-range scanning requires `tracker.patrol_enabled: true`.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
 - `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
@@ -69,9 +70,10 @@ Freenove sensors -> skill commands ------> Claude -> Edge TTS -> XVF3800 output
        |                 |
        |                 +-> guarded mecanum mobility
        v
-camera -> face detection/recognition -> PID gaze target --+
-skills -> named gestures -------------------------------+-> expression queue -> pan/tilt
-voice -> listening/thinking/speaking state -------------+
+camera -> face detection/recognition -> PID gaze target ----+
+skills -> named gestures ----------------------------------+-> expression queue -> pan/tilt
+interaction director -> turn cue + response gesture -------+
+voice -> listening/thinking/speaking state ----------------+
 ```
 
 The hardware boundary is explicit:
@@ -96,7 +98,7 @@ R08Y runs two main pipelines:
 ```text
 Vision: camera -> detection -> gaze target -> recognition -> vision skill hooks
 Voice:  wake word -> capture -> STT -> command skill or Claude -> TTS
-Motion: gaze + named gesture + interaction state -> one bounded pan/tilt writer
+Motion: gaze + named gesture + turn state -> one bounded pan/tilt writer
 ```
 
 Skills discover themselves from `r08y/skills/*/__init__.py`. Hardware-dependent skills load only when their required adapter reports available. A failed skill setup or startup is removed from command routing instead of remaining partly active.
@@ -158,6 +160,9 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 # Guided personality gestures; pan/tilt only, wheels never initialize
 ./venv/bin/python -m r08y --config config.yaml --expression-test
 
+# Coordinated acknowledgement, speech, and body language; no wheels
+./venv/bin/python -m r08y --config config.yaml --interaction-test
+
 # Camera, pan/tilt home, sensors, microphone, and speaker tone
 ./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware
 
@@ -176,7 +181,7 @@ r08y/
 ├── config.py               typed YAML configuration and validation
 ├── diagnostics.py          Pi smoke-test command path
 ├── hardware/               official Freenove runtime bridge
-├── modules/                vision, voice, AI, sensors, motion, and health
+├── modules/                vision, voice, AI, interaction, motion, and health
 └── skills/                 auto-discovered command and pipeline plugins
 tests/                      mock/fake unit and integration-boundary tests
 docs/HARDWARE_MAP.md        reuse/modify/add hardware decision record

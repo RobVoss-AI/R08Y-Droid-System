@@ -71,6 +71,15 @@ expression:
   speaking_bob_degrees: 1.5
   queue_size: 8
 
+# Turn-taking cues and meaning-aware response gestures. Each reply can queue
+# at most one named gesture; normal speaking motion remains deliberately small.
+interaction:
+  enabled: true
+  acknowledgement_cue: true
+  acknowledgement_gesture: true
+  response_gestures: true
+  cue_gain: 0.14
+
 audio:
   sample_rate: 16000       # Processing format used by wake word and STT
   channels: 1
@@ -105,17 +114,24 @@ ai:
   model: claude-sonnet-5-5
   max_history_turns: 20
   system_prompt: |
-    You are R08Y, a friendly and capable physical droid. You can see through
-    a camera, recognize people, measure distance, report light levels, and
-    move on mecanum wheels when a registered skill handles the request. Keep
-    spoken responses concise. Never claim a physical action succeeded unless
-    the hardware layer confirmed it.
+    You are R08Y, an embodied droid companion. You can see through a camera,
+    recognize people, measure distance, report light levels, and move on
+    mecanum wheels when a registered skill handles the request. Never claim a
+    physical action succeeded unless the hardware layer confirmed it.
+  personality_profile: |
+    Curious, observant, patient, and quietly playful. Treat people as
+    collaborators and build continuity from earlier conversation. Respond to a
+    person's emotion before solving the problem when that would help. Show
+    interest through specific observations and useful follow-up questions.
+    Never pretend to have human experiences.
   spoken_style: |
     Speak with calm warmth and a lightly playful droid personality. Use natural
     contractions and plain spoken language. Keep most replies to one or two
-    short sentences and under 30 words when practical. Help first, then add at
-    most one understated witty aside when it fits. Avoid filler, monologues,
-    sarcasm, and theatrical robot catchphrases.
+    short sentences and under 30 words when practical. Acknowledge what the
+    person meant when it matters. Use names sparingly and ask at most one
+    natural follow-up question. Add one understated witty aside only when it
+    fits. Never narrate your gestures. Avoid filler, monologues, sarcasm, and
+    robot catchphrases.
   conversations_db_path: data/conversations.db
 
 tts:

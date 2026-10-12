@@ -6,8 +6,9 @@ import asyncio
 import logging
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from r08y.config import TTSConfig
 from r08y.modules.audio_devices import PipeWireResolver
@@ -26,6 +27,12 @@ except ImportError:
 ALLOWED_PLAYERS = {"mpv", "ffplay", "paplay", "pw-play", "aplay"}
 
 
+@dataclass(frozen=True)
+class _SpeechRequest:
+    text: str
+    on_playback_start: Optional[Callable[[], Awaitable[None]]] = None
+
+
 class TextToSpeech:
     """Queue Edge TTS speech and route playback through the configured sink."""
 
@@ -33,7 +40,7 @@ class TextToSpeech:
         self._config = config
         self._speaking = False
         self._process: Optional[asyncio.subprocess.Process] = None
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._queue: asyncio.Queue[_SpeechRequest] = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._interrupted = False
         self._last_error: Optional[str] = None
@@ -125,31 +132,39 @@ class TextToSpeech:
 
     async def speak(self, text: str) -> None:
         if self.available and text.strip():
-            await self._queue.put(text)
+            await self._queue.put(_SpeechRequest(text))
 
-    async def speak_and_wait(self, text: str) -> bool:
+    async def speak_and_wait(
+        self,
+        text: str,
+        *,
+        on_playback_start: Optional[Callable[[], Awaitable[None]]] = None,
+    ) -> bool:
         if not self.available or not text.strip():
             return False
         self._last_error = None
-        await self._queue.put(text)
+        await self._queue.put(_SpeechRequest(text, on_playback_start))
         await self._queue.join()
         return self._last_error is None
 
     async def _playback_worker(self) -> None:
         while True:
-            text = None
+            request = None
             try:
-                text = await self._queue.get()
+                request = await self._queue.get()
                 self._interrupted = False
                 self._last_error = None
-                await self._synthesize_and_play(text)
+                await self._synthesize_and_play(
+                    request.text,
+                    on_playback_start=request.on_playback_start,
+                )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 logger.exception("TTS playback error")
             finally:
-                if text is not None:
+                if request is not None:
                     self._queue.task_done()
 
     async def _convert_to_wav(self, source: str, destination: str) -> bool:
@@ -191,7 +206,12 @@ class TextToSpeech:
             if return_code != 0:
                 raise RuntimeError(f"Audio player exited with status {return_code}")
 
-    async def _synthesize_and_play(self, text: str) -> None:
+    async def _synthesize_and_play(
+        self,
+        text: str,
+        *,
+        on_playback_start: Optional[Callable[[], Awaitable[None]]] = None,
+    ) -> None:
         self._speaking = True
         paths = []
         try:
@@ -219,6 +239,11 @@ class TextToSpeech:
                     raise RuntimeError("ffmpeg is required for WAV-only playback commands")
                 playback_path = wav_path
                 is_wav = True
+            if on_playback_start is not None:
+                try:
+                    await on_playback_start()
+                except Exception:
+                    logger.exception("Speech playback-start callback failed")
             await self._play_path(playback_path, is_wav=is_wav)
         finally:
             self._speaking = False

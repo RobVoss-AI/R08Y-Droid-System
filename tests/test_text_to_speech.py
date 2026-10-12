@@ -110,3 +110,40 @@ def test_synthesis_passes_configured_voice_tone(monkeypatch):
         "pitch": "-8Hz",
         "volume": "+0%",
     }
+
+
+def test_playback_start_callback_runs_after_synthesis_before_audio(monkeypatch):
+    events = []
+
+    class FakeCommunicate:
+        def __init__(self, _text, **_kwargs):
+            return None
+
+        async def save(self, path):
+            Path(path).write_bytes(b"mp3")
+            events.append("synthesized")
+
+    async def run():
+        monkeypatch.setattr(
+            text_to_speech,
+            "edge_tts",
+            SimpleNamespace(Communicate=FakeCommunicate),
+        )
+        tts = TextToSpeech(TTSConfig(playback_command="mpv"))
+
+        async def playback_started():
+            events.append("gesture")
+
+        async def fake_play(_path, is_wav=False):
+            assert not is_wav
+            events.append("audio")
+
+        monkeypatch.setattr(tts, "_play_path", fake_play)
+        await tts._synthesize_and_play(
+            "Hello, Rob.",
+            on_playback_start=playback_started,
+        )
+
+    asyncio.run(run())
+
+    assert events == ["synthesized", "gesture", "audio"]

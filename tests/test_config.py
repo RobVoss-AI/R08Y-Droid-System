@@ -16,9 +16,13 @@ def test_example_config_is_valid():
     assert config.tts.voice == "en-US-AndrewMultilingualNeural"
     assert config.tts.rate == "+1%"
     assert config.tts.pitch == "+2Hz"
+    assert "Curious, observant" in config.ai.personality_profile
     assert "lightly playful droid personality" in config.ai.spoken_style
     assert config.expression.enabled is True
     assert config.expression.max_step_degrees == 3.0
+    assert config.interaction.acknowledgement_cue is True
+    assert config.interaction.response_gestures is True
+    assert config.interaction.cue_gain == 0.14
     assert config.tracker.patrol_enabled is False
     assert config.wake_word.phrase == "ROBY"
     assert config.wake_word.keyword_path == "/opt/r08y/wake_words/roby.ppn"
@@ -42,6 +46,7 @@ def test_existing_config_inherits_spoken_style_when_field_is_absent(tmp_path):
     config = load_config(str(config_file))
 
     assert config.ai.system_prompt == "You are R08Y."
+    assert "Curious, observant" in config.ai.personality_profile
     assert "natural contractions" in config.ai.spoken_style
 
 
@@ -122,6 +127,15 @@ def test_invalid_expression_motion_is_rejected(tmp_path):
     assert any("gesture_scale" in error for error in errors)
     assert any("ambient movement" in error for error in errors)
     assert any("queue_size" in error for error in errors)
+
+
+def test_invalid_interaction_cue_gain_is_rejected(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("interaction:\n  cue_gain: 0.75\n")
+
+    errors = validate_config(load_config(str(config_file)))
+
+    assert any("cue_gain" in error for error in errors)
 
 
 def test_invalid_wake_word_configuration_is_rejected(tmp_path):
