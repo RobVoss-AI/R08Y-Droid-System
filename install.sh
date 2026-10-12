@@ -26,7 +26,7 @@ sudo apt-get install -y \
     libopenblas-dev portaudio19-dev \
     ffmpeg mpv alsa-utils i2c-tools pipewire-bin wireplumber git
 
-for optional_package in python3-picamera2 python3-dlib; do
+for optional_package in python3-picamera2 python3-dlib opencv-data; do
     if apt-cache show "${optional_package}" >/dev/null 2>&1; then
         sudo apt-get install -y "${optional_package}"
     else
@@ -53,6 +53,8 @@ sudo rm -rf "${INSTALL_DIR}/r08y"
 sudo cp -R "${SCRIPT_DIR}/r08y" "${INSTALL_DIR}/r08y"
 sudo cp "${SCRIPT_DIR}/requirements.txt" "${INSTALL_DIR}/requirements.txt"
 sudo chown -R "${R08Y_USER}:${R08Y_GROUP}" "${INSTALL_DIR}"
+sudo install -d -o "${R08Y_USER}" -g "${R08Y_GROUP}" -m 750 \
+    "${INSTALL_DIR}/wake_words"
 
 if [[ ! -f "${INSTALL_DIR}/config.yaml" ]]; then
     sudo install -o "${R08Y_USER}" -g "${R08Y_GROUP}" -m 640 \
@@ -103,5 +105,8 @@ echo "3. Reboot once if group membership or I2C settings changed."
 echo "4. Passive check: cd ${INSTALL_DIR} && ./venv/bin/python -m r08y --smoke-test"
 echo "5. Guided audio: ./venv/bin/python -m r08y --config config.yaml --audio-test"
 echo "6. Speech audition: ./venv/bin/python -m r08y --config config.yaml --speech-test"
-echo "7. Start: sudo systemctl start r08y"
-echo "8. Logs: journalctl -u r08y -f"
+echo "7. Wake word: ./venv/bin/python -m r08y --config config.yaml --wake-word-test"
+echo "8. Expression: ./venv/bin/python -m r08y --config config.yaml --expression-test"
+echo "9. Interaction: ./venv/bin/python -m r08y --config config.yaml --interaction-test"
+echo "10. Start: sudo systemctl start r08y"
+echo "11. Logs: journalctl -u r08y -f"

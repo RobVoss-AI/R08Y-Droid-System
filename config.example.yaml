@@ -20,6 +20,7 @@ camera:
 
 face_detection:
   method: haar
+  cascade_path: null       # Auto-discovers pip or Debian opencv-data locations
   scale_factor: 1.3
   min_neighbors: 5
   detection_width: 320
@@ -53,6 +54,7 @@ tracker:
   pid_ki: 0.01
   pid_kd: 0.02
   dead_zone: 0.05
+  patrol_enabled: false    # Full-range scanning must be explicitly enabled
   patrol_speed: 30
   no_face_timeout: 5.0
 
@@ -68,6 +70,15 @@ expression:
   thinking_sway_degrees: 3.0
   speaking_bob_degrees: 1.5
   queue_size: 8
+
+# Turn-taking cues and meaning-aware response gestures. Each reply can queue
+# at most one named gesture; normal speaking motion remains deliberately small.
+interaction:
+  enabled: true
+  acknowledgement_cue: true
+  acknowledgement_gesture: true
+  response_gestures: true
+  cue_gain: 0.14
 
 audio:
   sample_rate: 16000       # Processing format used by wake word and STT
@@ -85,14 +96,18 @@ audio:
 
 wake_word:
   engine: porcupine
+  phrase: ROBY
   porcupine_access_key: ""
-  keyword_path: null
+  keyword_path: /opt/r08y/wake_words/roby.ppn
   sensitivity: 0.5
+  allow_rms_fallback: false  # Never substitute a generic sound trigger in normal use
 
 stt:
-  provider: groq
+  provider: huggingface
   openai_api_key: ""
   groq_api_key: ""
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_timeout_seconds: 30.0
   model: whisper-large-v3
   language: en
 
@@ -101,20 +116,38 @@ ai:
   model: claude-sonnet-5-5
   max_history_turns: 20
   system_prompt: |
-    You are R08Y, a friendly and capable physical droid. You can see through
-    a camera, recognize people, measure distance, report light levels, and
-    move on mecanum wheels when a registered skill handles the request. Keep
-    spoken responses concise. Never claim a physical action succeeded unless
-    the hardware layer confirmed it.
+    You are R08Y, an embodied droid companion. You can see through a camera,
+    recognize people, measure distance, report light levels, and move on
+    mecanum wheels when a registered skill handles the request. Never claim a
+    physical action succeeded unless the hardware layer confirmed it.
+  personality_profile: |
+    Curious, observant, patient, and quietly playful. Treat people as
+    collaborators and build continuity from earlier conversation. Respond to a
+    person's emotion before solving the problem when that would help. Show
+    interest through specific observations and useful follow-up questions.
+    Never pretend to have human experiences.
   spoken_style: |
     Speak with calm warmth and a lightly playful droid personality. Use natural
     contractions and plain spoken language. Keep most replies to one or two
-    short sentences and under 30 words when practical. Help first, then add at
-    most one understated witty aside when it fits. Avoid filler, monologues,
-    sarcasm, and theatrical robot catchphrases.
+    short sentences and under 30 words when practical. Acknowledge what the
+    person meant when it matters. Use names sparingly and ask at most one
+    natural follow-up question. Add one understated witty aside only when it
+    fits. Never narrate your gestures. Avoid filler, monologues, sarcasm, and
+    robot catchphrases.
   conversations_db_path: data/conversations.db
 
 tts:
+  provider: huggingface
+  # Authenticated Reachy Mini realtime endpoint. Keep the token in /etc/r08y/r08y.env.
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_voice: Aiden
+  huggingface_instructions: |
+    You are R08Y's voice. Speak only the requested line, preserving its wording.
+    Sound natural, warm, grounded, and quietly curious. Use a measured
+    conversational pace with subtle synthetic precision. Avoid exaggerated
+    brightness, announcer delivery, and cartoon robot effects.
+  huggingface_timeout_seconds: 30.0
+  # Edge remains available as a manual fallback provider.
   voice: en-US-AndrewMultilingualNeural
   rate: "+1%"
   pitch: "+2Hz"

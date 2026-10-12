@@ -1,8 +1,8 @@
 """Face tracker module for R08Y.
 
 Uses a PID controller to smoothly track a detected face by adjusting
-pan/tilt servos. Includes dead zone to prevent jitter and a patrol scan
-mode when no face is visible.
+pan/tilt servos. Includes a dead zone to prevent jitter and an optional
+patrol scan mode when no face is visible.
 """
 
 import asyncio
@@ -77,9 +77,10 @@ class FaceTracker:
             tracker_config.pid_kp, tracker_config.pid_ki, tracker_config.pid_kd
         )
 
-        self._last_face_time: float = 0.0
+        self._last_face_time = time.monotonic()
         self._patrol_direction: float = 1.0  # 1.0 = right, -1.0 = left
         self._patrol_active = False
+        self._idle_home_set = False
         self._prev_update_time: Optional[float] = None
 
     async def update(self, detection: Optional[FaceDetection]) -> None:
@@ -92,14 +93,28 @@ class FaceTracker:
         if detection is not None:
             self._last_face_time = now
             self._patrol_active = False
+            self._idle_home_set = False
             await self._track_face(detection)
         elif now - self._last_face_time > self._tracker_config.no_face_timeout:
-            if not self._patrol_active:
-                self._patrol_active = True
+            if self._tracker_config.patrol_enabled:
+                if not self._patrol_active:
+                    self._patrol_active = True
+                    self._pan_pid.reset()
+                    self._tilt_pid.reset()
+                    logger.debug(
+                        "No face for %.1fs; starting patrol",
+                        self._tracker_config.no_face_timeout,
+                    )
+                await self._patrol(now)
+            elif not self._idle_home_set:
+                self._patrol_active = False
                 self._pan_pid.reset()
                 self._tilt_pid.reset()
-                logger.debug("No face for %.1fs — starting patrol", self._tracker_config.no_face_timeout)
-            await self._patrol(now)
+                await self._expression.set_gaze_target(
+                    self._servo_config.home_pan,
+                    self._servo_config.home_tilt,
+                )
+                self._idle_home_set = True
 
         self._prev_update_time = now
 

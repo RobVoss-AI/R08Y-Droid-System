@@ -194,6 +194,67 @@ def test_face_tracker_submits_gaze_target_to_expression_layer():
     asyncio.run(run())
 
 
+def test_face_tracker_returns_home_instead_of_scanning_by_default():
+    class FakeExpression:
+        def __init__(self):
+            self.target = (120.0, 80.0)
+            self.updates = []
+
+        async def get_gaze_target(self):
+            return self.target
+
+        async def set_gaze_target(self, pan, tilt):
+            self.target = (pan, tilt)
+            self.updates.append(self.target)
+
+    async def run():
+        expression = FakeExpression()
+        tracker = FaceTracker(
+            expression,
+            ServoConfig(home_pan=90, home_tilt=90),
+            TrackerConfig(no_face_timeout=0, patrol_enabled=False),
+        )
+
+        await tracker.update(None)
+        await tracker.update(None)
+
+        assert expression.updates == [(90, 90)]
+
+    asyncio.run(run())
+
+
+def test_face_tracker_scans_only_when_patrol_is_explicitly_enabled():
+    class FakeExpression:
+        def __init__(self):
+            self.target = (90.0, 90.0)
+
+        async def get_gaze_target(self):
+            return self.target
+
+        async def set_gaze_target(self, pan, tilt):
+            self.target = (pan, tilt)
+
+    async def run():
+        expression = FakeExpression()
+        tracker = FaceTracker(
+            expression,
+            ServoConfig(),
+            TrackerConfig(
+                no_face_timeout=0,
+                patrol_enabled=True,
+                patrol_speed=30,
+            ),
+        )
+        tracker._last_face_time = 0
+        tracker._prev_update_time = 0
+
+        await tracker.update(None)
+
+        assert expression.target[0] > 90
+
+    asyncio.run(run())
+
+
 def test_camera_gesture_skill_submits_named_gesture():
     class FakeExpression:
         def __init__(self):

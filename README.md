@@ -4,13 +4,13 @@ R08Y turns a Raspberry Pi 4B and Freenove 4WD mecanum chassis into a voice-contr
 
 ## Status
 
-In development. XVF3800 capture and speaker playback have been verified on the Pi. The expression kernel and mock-hardware suite are desktop-verified. Live acceptance still remains for pan/tilt expression, the integrated R08Y voice turn, motor direction, and camera selection.
+In development. XVF3800 capture and speaker playback have been verified on the Pi. The ROBY wake-word path, interaction director, expression kernel, and mock-hardware suite are desktop-verified. Live acceptance still remains for ROBY detection, coordinated voice/body-language interaction, motor direction, and camera selection.
 
 ## Stack
 
 - Python 3.11+ with `asyncio` pipelines for vision, voice, and skills
 - Official Freenove FNK0043 Python modules behind R08Y hardware adapters
-- OpenCV/Picamera2, ALSA/PyAudio, PipeWire, Porcupine, Whisper, Claude, and Edge TTS
+- OpenCV/Picamera2, ALSA/PyAudio, PipeWire, Porcupine, Whisper, Claude, and Hugging Face realtime speech
 - SQLite for face encodings and conversation history
 - `systemd` service for Debian 13 and Raspberry Pi OS, including the user PipeWire runtime
 
@@ -44,12 +44,18 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 ## Notes for maintainers
 
 - R08Y does not copy or guess Freenove pin and PWM mappings. It loads the official `motor.py`, `servo.py`, `ultrasonic.py`, and `adc.py` modules from the Freenove `Code/Server` directory.
+- Haar face detection resolves both pip OpenCV data and Debian's `/usr/share/opencv4/haarcascades` location. The installer adds `opencv-data` when available; missing cascade data disables vision without taking voice offline.
 - The official Freenove `params.json` must identify the connector, controller PCB, and Pi generation before ADC light-sensor initialization. R08Y refuses to trigger the upstream interactive prompt inside the service.
 - Numeric audio indexes are unstable across reboots. Input and output default to a strict name match for `XVF3800`; R08Y will not silently speak through another sink.
 - The XVF3800 uses a name-resolved `arecord` stream at its verified native S16_LE, 16 kHz, two-channel format. Reads have a hard timeout, and R08Y downmixes to 16 kHz mono for wake word and STT processing. Other microphones retain the PyAudio fallback.
 - Startup reads an actual capture chunk. If the XVF3800 returns an immediate I/O error or no samples before the deadline, R08Y closes capture and reports the known physical USB unplug/replug recovery.
+- The production wake word is `ROBY`. R08Y requires a Raspberry Pi Porcupine `.ppn` model and fails closed when the model or Picovoice AccessKey is missing. RMS sound triggering remains an explicit development option and is disabled by default.
+- Custom wake-word models and API keys are local deployment assets. The repository ignores `.ppn` files, and secrets stay in `/etc/r08y/r08y.env`.
 - One expression controller owns every runtime pan/tilt write. Face tracking and skills submit bounded gaze targets or named gestures to its queue.
 - Conversational states add restrained idle, listening, thinking, and speaking motion. `--expression-test` exercises only pan/tilt and never initializes wheel movement.
+- The interaction director adds a quiet acknowledgement cue after ROBY, chooses at most one meaning-aware gesture per response, and leaves neutral replies unembellished. `--interaction-test` auditions the speaker and pan/tilt together without initializing mobility.
+- Hugging Face realtime speech uses the Reachy Mini session service and its Qwen3-TTS voices. The provider token and allocated WebSocket URL are never logged. Edge remains a manual fallback.
+- No-face patrol scanning is disabled by default. After losing a face, R08Y returns its gaze to center and retains only the restrained idle sway; full-range scanning requires `tracker.patrol_enabled: true`.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
 - `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
 - Negative `mobility.wheel_scale` values reverse individual wheels. Confirm direction only with all four wheels clear of the surface.
@@ -58,16 +64,17 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 ## Architecture
 
 ```text
-XVF3800 USB input -> wake word -> record -> Whisper STT
+XVF3800 USB input -> ROBY model -> record -> HF realtime STT
                                              |
                                              v
-Freenove sensors -> skill commands ------> Claude -> Edge TTS -> XVF3800 output
+Freenove sensors -> skill commands ------> Claude -> HF realtime voice -> XVF3800 output
        |                 |
        |                 +-> guarded mecanum mobility
        v
-camera -> face detection/recognition -> PID gaze target --+
-skills -> named gestures -------------------------------+-> expression queue -> pan/tilt
-voice -> listening/thinking/speaking state -------------+
+camera -> face detection/recognition -> PID gaze target ----+
+skills -> named gestures ----------------------------------+-> expression queue -> pan/tilt
+interaction director -> turn cue + response gesture -------+
+voice -> listening/thinking/speaking state ----------------+
 ```
 
 The hardware boundary is explicit:
@@ -92,7 +99,7 @@ R08Y runs two main pipelines:
 ```text
 Vision: camera -> detection -> gaze target -> recognition -> vision skill hooks
 Voice:  wake word -> capture -> STT -> command skill or Claude -> TTS
-Motion: gaze + named gesture + interaction state -> one bounded pan/tilt writer
+Motion: gaze + named gesture + turn state -> one bounded pan/tilt writer
 ```
 
 Skills discover themselves from `r08y/skills/*/__init__.py`. Hardware-dependent skills load only when their required adapter reports available. A failed skill setup or startup is removed from command routing instead of remaining partly active.
@@ -116,11 +123,13 @@ Copy `config.example.yaml` to `config.yaml`. Put secrets in the environment file
 R08Y_ANTHROPIC_API_KEY=
 R08Y_GROQ_API_KEY=
 R08Y_OPENAI_API_KEY=
+R08Y_HF_TOKEN=
 R08Y_PICOVOICE_KEY=
+R08Y_WAKE_WORD_PATH=/opt/r08y/wake_words/roby.ppn
 R08Y_FREENOVE_PATH=
 ```
 
-The minimum conversational path uses Anthropic, Groq or OpenAI for transcription, Picovoice for the wake word, and Edge TTS for speech. Weather uses Open-Meteo without an API key.
+The example path keeps ROBY wake detection local, sends the recorded utterance to Hugging Face for realtime transcription, uses Claude and R08Y's local skills for the response, then sends response text to the same Hugging Face service for a Reachy-style voice. The deployed service requires a verified personal read token. Generate the platform-specific custom wake model in [Picovoice Console](https://console.picovoice.ai/) and keep both credentials outside Git. Groq and OpenAI transcription remain fallback providers. Weather uses Open-Meteo without an API key.
 
 The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/models/overview) and [`whisper-large-v3`](https://console.groq.com/docs/model/whisper-large-v3). Both identifiers were checked against their providers’ model documentation on October 4, 2026.
 
@@ -139,16 +148,21 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 # Guided two-second microphone sample and speaker tone; no other hardware
 ./venv/bin/python -m r08y --config config.yaml --audio-test
 
-# Speak a fixed sentence with the configured voice, rate, pitch, and volume
+# Detect ROBY with the configured custom model; no camera, servos, or motors
+./venv/bin/python -m r08y --config config.yaml --wake-word-test
+
+# Speak a fixed sentence with the configured provider and voice
 ./venv/bin/python -m r08y --config config.yaml --speech-test
 
 # Audition a voice without changing config.yaml
 ./venv/bin/python -m r08y --config config.yaml --speech-test \
-  --speech-voice en-US-AndrewMultilingualNeural \
-  --speech-rate=+1% --speech-pitch=+2Hz
+  --speech-voice Aiden
 
 # Guided personality gestures; pan/tilt only, wheels never initialize
 ./venv/bin/python -m r08y --config config.yaml --expression-test
+
+# Coordinated acknowledgement, speech, and body language; no wheels
+./venv/bin/python -m r08y --config config.yaml --interaction-test
 
 # Camera, pan/tilt home, sensors, microphone, and speaker tone
 ./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware
@@ -168,7 +182,7 @@ r08y/
 ├── config.py               typed YAML configuration and validation
 ├── diagnostics.py          Pi smoke-test command path
 ├── hardware/               official Freenove runtime bridge
-├── modules/                vision, voice, AI, sensors, motion, and health
+├── modules/                vision, voice, AI, interaction, motion, and health
 └── skills/                 auto-discovered command and pipeline plugins
 tests/                      mock/fake unit and integration-boundary tests
 docs/HARDWARE_MAP.md        reuse/modify/add hardware decision record

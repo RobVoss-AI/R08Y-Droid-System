@@ -13,5 +13,6 @@ def test_system_prompt_keeps_spoken_style_separate_from_visual_context():
     prompt = brain._build_system_prompt("You are looking at Rob.")
 
     assert prompt.startswith("You are R08Y.")
+    assert "[Personality: Curious, observant" in prompt
     assert "[Spoken response style: Use short, natural spoken replies.]" in prompt
     assert prompt.endswith("[Visual context: You are looking at Rob.]")

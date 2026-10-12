@@ -6,11 +6,13 @@ import asyncio
 import logging
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from r08y.config import TTSConfig
 from r08y.modules.audio_devices import PipeWireResolver
+from r08y.modules.huggingface_speech import HuggingFaceSpeech, safe_exception_detail
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +28,36 @@ except ImportError:
 ALLOWED_PLAYERS = {"mpv", "ffplay", "paplay", "pw-play", "aplay"}
 
 
+@dataclass(frozen=True)
+class _SpeechRequest:
+    text: str
+    on_playback_start: Optional[Callable[[], Awaitable[None]]] = None
+
+
+def _synthesis_error_detail(exc: Exception, provider: str = "edge") -> str:
+    """Return an actionable message without logging provider request tokens."""
+    if provider == "huggingface":
+        return safe_exception_detail(exc)
+    status = getattr(exc, "status", None)
+    if status == 403:
+        return (
+            "Edge TTS rejected synthesis with HTTP 403. Confirm the Pi UTC clock "
+            "is synchronized; if it is correct, the upstream service may be "
+            "temporarily rejecting this network."
+        )
+    if status is not None:
+        return f"Edge TTS returned HTTP {status}."
+    return f"{type(exc).__name__}: {exc}"
+
+
 class TextToSpeech:
-    """Queue Edge TTS speech and route playback through the configured sink."""
+    """Queue configured speech synthesis and route it to the named sink."""
 
     def __init__(self, config: TTSConfig):
         self._config = config
         self._speaking = False
         self._process: Optional[asyncio.subprocess.Process] = None
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._queue: asyncio.Queue[_SpeechRequest] = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._interrupted = False
         self._last_error: Optional[str] = None
@@ -42,6 +66,7 @@ class TextToSpeech:
         self.output_detail = "playback path has not been checked"
         self.playback_available = False
         self.available = False
+        self._huggingface: Optional[HuggingFaceSpeech] = None
 
     def _select_player(self) -> Optional[str]:
         requested = self._config.playback_command
@@ -116,40 +141,79 @@ class TextToSpeech:
             self.output_detail = f"{player}: output target {target}"
 
         self.playback_available = True
-        self.available = EDGE_TTS_AVAILABLE
+        if self._config.provider == "huggingface":
+            self._huggingface = HuggingFaceSpeech(
+                token=self._config.huggingface_token,
+                session_url=self._config.huggingface_session_url,
+                voice=self._config.huggingface_voice,
+                instructions=self._config.huggingface_instructions,
+                timeout_seconds=self._config.huggingface_timeout_seconds,
+            )
+            try:
+                await self._huggingface.start()
+            except Exception as exc:
+                self._last_error = _synthesis_error_detail(exc, "huggingface")
+                self.output_detail = f"{self.output_detail}; {self._last_error}"
+                logger.error("Hugging Face speech unavailable: %s", self._last_error)
+                self._huggingface = None
+                return
+            self.available = True
+        else:
+            self.available = EDGE_TTS_AVAILABLE
         if self.available:
             self._task = asyncio.create_task(self._playback_worker())
-            logger.info("TTS ready (voice=%s, player=%s)", self._config.voice, player)
+            voice = (
+                self._config.huggingface_voice
+                if self._config.provider == "huggingface"
+                else self._config.voice
+            )
+            logger.info(
+                "TTS ready (provider=%s, voice=%s, player=%s)",
+                self._config.provider,
+                voice,
+                player,
+            )
         else:
             logger.warning("Audio playback is ready, but speech synthesis is unavailable")
 
     async def speak(self, text: str) -> None:
         if self.available and text.strip():
-            await self._queue.put(text)
+            await self._queue.put(_SpeechRequest(text))
 
-    async def speak_and_wait(self, text: str) -> bool:
+    async def speak_and_wait(
+        self,
+        text: str,
+        *,
+        on_playback_start: Optional[Callable[[], Awaitable[None]]] = None,
+    ) -> bool:
         if not self.available or not text.strip():
             return False
         self._last_error = None
-        await self._queue.put(text)
+        await self._queue.put(_SpeechRequest(text, on_playback_start))
         await self._queue.join()
         return self._last_error is None
 
     async def _playback_worker(self) -> None:
         while True:
-            text = None
+            request = None
             try:
-                text = await self._queue.get()
+                request = await self._queue.get()
                 self._interrupted = False
                 self._last_error = None
-                await self._synthesize_and_play(text)
+                await self._synthesize_and_play(
+                    request.text,
+                    on_playback_start=request.on_playback_start,
+                )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self._last_error = f"{type(exc).__name__}: {exc}"
-                logger.exception("TTS playback error")
+                self._last_error = _synthesis_error_detail(exc, self._config.provider)
+                if getattr(exc, "status", None) is not None:
+                    logger.error("TTS playback error: %s", self._last_error)
+                else:
+                    logger.exception("TTS playback error")
             finally:
-                if text is not None:
+                if request is not None:
                     self._queue.task_done()
 
     async def _convert_to_wav(self, source: str, destination: str) -> bool:
@@ -191,10 +255,33 @@ class TextToSpeech:
             if return_code != 0:
                 raise RuntimeError(f"Audio player exited with status {return_code}")
 
-    async def _synthesize_and_play(self, text: str) -> None:
+    async def _synthesize_and_play(
+        self,
+        text: str,
+        *,
+        on_playback_start: Optional[Callable[[], Awaitable[None]]] = None,
+    ) -> None:
         self._speaking = True
         paths = []
         try:
+            if self._config.provider == "huggingface":
+                if self._huggingface is None:
+                    raise RuntimeError("Hugging Face realtime speech is not connected")
+                wav_data = await self._huggingface.synthesize(text)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+                    temp_wav.write(wav_data)
+                    wav_path = temp_wav.name
+                paths.append(wav_path)
+                if self._interrupted:
+                    return
+                if on_playback_start is not None:
+                    try:
+                        await on_playback_start()
+                    except Exception:
+                        logger.exception("Speech playback-start callback failed")
+                await self._play_path(wav_path, is_wav=True)
+                return
+
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
                 mp3_path = temp_file.name
             paths.append(mp3_path)
@@ -219,6 +306,11 @@ class TextToSpeech:
                     raise RuntimeError("ffmpeg is required for WAV-only playback commands")
                 playback_path = wav_path
                 is_wav = True
+            if on_playback_start is not None:
+                try:
+                    await on_playback_start()
+                except Exception:
+                    logger.exception("Speech playback-start callback failed")
             await self._play_path(playback_path, is_wav=is_wav)
         finally:
             self._speaking = False
@@ -278,5 +370,8 @@ class TextToSpeech:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._huggingface is not None:
+            await self._huggingface.stop()
+            self._huggingface = None
         self.available = False
         self.playback_available = False

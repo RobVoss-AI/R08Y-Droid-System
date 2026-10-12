@@ -29,6 +29,7 @@ class CameraConfig:
 @dataclass
 class FaceDetectionConfig:
     method: str = "haar"
+    cascade_path: Optional[str] = None
     scale_factor: float = 1.3
     min_neighbors: int = 5
     detection_width: int = 320
@@ -68,6 +69,7 @@ class TrackerConfig:
     pid_ki: float = 0.01
     pid_kd: float = 0.02
     dead_zone: float = 0.05
+    patrol_enabled: bool = False
     patrol_speed: float = 30.0
     no_face_timeout: float = 5.0
 
@@ -83,6 +85,15 @@ class ExpressionConfig:
     thinking_sway_degrees: float = 3.0
     speaking_bob_degrees: float = 1.5
     queue_size: int = 8
+
+
+@dataclass
+class InteractionConfig:
+    enabled: bool = True
+    acknowledgement_cue: bool = True
+    acknowledgement_gesture: bool = True
+    response_gestures: bool = True
+    cue_gain: float = 0.14
 
 
 @dataclass
@@ -104,9 +115,11 @@ class AudioConfig:
 @dataclass
 class WakeWordConfig:
     engine: str = "porcupine"
+    phrase: str = "ROBY"
     porcupine_access_key: str = ""
-    keyword_path: Optional[str] = None
+    keyword_path: Optional[str] = "/opt/r08y/wake_words/roby.ppn"
     sensitivity: float = 0.5
+    allow_rms_fallback: bool = False
 
 
 @dataclass
@@ -114,6 +127,11 @@ class STTConfig:
     provider: str = "groq"
     openai_api_key: str = ""
     groq_api_key: str = ""
+    huggingface_token: str = ""
+    huggingface_session_url: str = (
+        "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
+    )
+    huggingface_timeout_seconds: float = 30.0
     model: str = "whisper-large-v3"
     language: str = "en"
 
@@ -124,27 +142,47 @@ class AIConfig:
     model: str = "claude-sonnet-5-5"
     max_history_turns: int = 20
     system_prompt: str = (
-        "You are R08Y, a friendly and helpful droid assistant. You have a physical "
-        "body with a camera and can see the people you talk to. You recognize faces "
-        "and remember conversations. Keep responses conversational and concise — "
-        "you're speaking out loud, not writing an essay."
+        "You are R08Y, an embodied droid companion. You have a camera, recognize "
+        "faces, and remember conversations. Never claim a physical action succeeded "
+        "without hardware confirmation."
+    )
+    personality_profile: str = (
+        "Curious, observant, patient, and quietly playful. Treat people as "
+        "collaborators and build continuity from earlier conversation. Respond to a "
+        "person's emotion before solving the problem when that would help. Show "
+        "interest through specific observations and useful follow-up questions. Never "
+        "pretend to have human experiences."
     )
     spoken_style: str = (
         "Speak with calm warmth and a lightly playful droid personality. Use natural "
         "contractions and plain spoken language. Keep most replies to one or two short "
-        "sentences and under 30 words when practical. Help first, then add at most one "
-        "understated witty aside when it fits. Avoid filler, monologues, sarcasm, and "
-        "theatrical robot catchphrases."
+        "sentences and under 30 words when practical. Acknowledge what the person meant "
+        "when it matters. Use names sparingly and ask at most one natural follow-up "
+        "question. Add one understated witty aside only when it fits. Never narrate "
+        "your gestures. Avoid filler, monologues, sarcasm, and robot catchphrases."
     )
     conversations_db_path: str = "data/conversations.db"
 
 
 @dataclass
 class TTSConfig:
+    provider: str = "edge"
     voice: str = "en-US-AndrewMultilingualNeural"
     rate: str = "+1%"
     pitch: str = "+2Hz"
     volume: str = "+0%"
+    huggingface_token: str = ""
+    huggingface_session_url: str = (
+        "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
+    )
+    huggingface_voice: str = "Aiden"
+    huggingface_instructions: str = (
+        "You are R08Y's voice. Speak only the requested line, preserving its wording. "
+        "Sound natural, warm, grounded, and quietly curious. Use a measured conversational "
+        "pace with subtle synthetic precision. Avoid exaggerated brightness, announcer "
+        "delivery, and cartoon robot effects."
+    )
+    huggingface_timeout_seconds: float = 30.0
     playback_command: str = "pw-play"
     output_device_name: str = "XVF3800"
     output_target: Optional[str] = None
@@ -219,6 +257,7 @@ class R08YConfig:
     servos: ServoConfig = field(default_factory=ServoConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     expression: ExpressionConfig = field(default_factory=ExpressionConfig)
+    interaction: InteractionConfig = field(default_factory=InteractionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     stt: STTConfig = field(default_factory=STTConfig)
@@ -248,12 +287,17 @@ def _apply_env_overrides(config: R08YConfig) -> None:
         "R08Y_OPENAI_API_KEY": ("stt", "openai_api_key"),
         "R08Y_GROQ_API_KEY": ("stt", "groq_api_key"),
         "R08Y_PICOVOICE_KEY": ("wake_word", "porcupine_access_key"),
+        "R08Y_WAKE_WORD_PATH": ("wake_word", "keyword_path"),
         "R08Y_FREENOVE_PATH": ("freenove", "library_path"),
     }
     for env_var, (section, attr) in env_map.items():
         value = os.environ.get(env_var)
         if value:
             setattr(getattr(config, section), attr, value)
+    huggingface_token = os.environ.get("R08Y_HF_TOKEN")
+    if huggingface_token:
+        config.stt.huggingface_token = huggingface_token
+        config.tts.huggingface_token = huggingface_token
 
 
 def load_config(config_path: str = "config.yaml") -> R08YConfig:
@@ -274,6 +318,7 @@ def load_config(config_path: str = "config.yaml") -> R08YConfig:
         servos=_merge_dict_to_dataclass(ServoConfig, data.get("servos")),
         tracker=_merge_dict_to_dataclass(TrackerConfig, data.get("tracker")),
         expression=_merge_dict_to_dataclass(ExpressionConfig, data.get("expression")),
+        interaction=_merge_dict_to_dataclass(InteractionConfig, data.get("interaction")),
         audio=_merge_dict_to_dataclass(AudioConfig, data.get("audio")),
         wake_word=_merge_dict_to_dataclass(WakeWordConfig, data.get("wake_word")),
         stt=_merge_dict_to_dataclass(STTConfig, data.get("stt")),
@@ -311,12 +356,43 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("audio hardware_channels must be positive or null")
     if config.audio.capture_backend not in {"auto", "alsa", "pyaudio"}:
         errors.append("audio capture_backend must be auto, alsa, or pyaudio")
+    if config.wake_word.engine not in {"porcupine", "rms"}:
+        errors.append("wake_word engine must be porcupine or rms")
+    if config.stt.provider not in {"huggingface", "groq", "openai"}:
+        errors.append("stt provider must be huggingface, groq, or openai")
+    if config.stt.huggingface_timeout_seconds <= 0:
+        errors.append("stt huggingface_timeout_seconds must be positive")
+    if not config.stt.huggingface_session_url.startswith("https://"):
+        errors.append("stt huggingface_session_url must use https")
+    if config.face_detection.method not in {"haar", "dnn"}:
+        errors.append("face_detection method must be haar or dnn")
+    if not config.wake_word.phrase.strip():
+        errors.append("wake_word phrase must not be empty")
+    if not 0 <= config.wake_word.sensitivity <= 1:
+        errors.append("wake_word sensitivity must be between 0 and 1")
+    if (
+        config.wake_word.engine == "porcupine"
+        and config.wake_word.keyword_path
+        and not config.wake_word.keyword_path.casefold().endswith(".ppn")
+    ):
+        errors.append("wake_word keyword_path must point to a custom .ppn model")
+    if config.tts.provider not in {"huggingface", "edge"}:
+        errors.append("tts provider must be huggingface or edge")
     if not re.fullmatch(r"[+-]\d+%", config.tts.rate):
         errors.append("tts rate must use a signed percentage such as +0% or -10%")
     if not re.fullmatch(r"[+-]\d+Hz", config.tts.pitch):
         errors.append("tts pitch must use signed Hz such as +0Hz or -10Hz")
     if not re.fullmatch(r"[+-]\d+%", config.tts.volume):
         errors.append("tts volume must use a signed percentage such as +0% or -10%")
+    if config.tts.huggingface_timeout_seconds <= 0:
+        errors.append("tts huggingface_timeout_seconds must be positive")
+    if not config.tts.huggingface_session_url.startswith("https://"):
+        errors.append("tts huggingface_session_url must use https")
+    if config.tts.huggingface_voice not in {
+        "Aiden", "Ryan", "Dylan", "Eric", "Ono_Anna", "Serena", "Sohee",
+        "Uncle_Fu", "Vivian",
+    }:
+        errors.append("tts huggingface_voice is not supported by the Reachy backend")
     if config.servos.driver == "gpio" and (
         config.servos.gpio_pan_pin is None or config.servos.gpio_tilt_pin is None
     ):
@@ -338,6 +414,8 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("expression ambient movement must be between 0 and 10 degrees")
     if not 1 <= config.expression.queue_size <= 32:
         errors.append("expression queue_size must be between 1 and 32")
+    if not 0 <= config.interaction.cue_gain <= 0.5:
+        errors.append("interaction cue_gain must be between 0 and 0.5")
     if config.distance.driver == "gpio" and (
         config.distance.trigger_pin is None or config.distance.echo_pin is None
     ):

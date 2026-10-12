@@ -257,10 +257,17 @@ async def run_speech_test(
         "Hi, Rob. I'm R08Y, and my audio systems are online. "
         "Ready when you are."
     )
-    emit(
-        f"R08Y speech test: voice={config.tts.voice}, rate={config.tts.rate}, "
-        f"pitch={config.tts.pitch}, volume={config.tts.volume}"
-    )
+    if config.tts.provider == "huggingface":
+        emit(
+            "R08Y speech test: provider=huggingface, "
+            f"voice={config.tts.huggingface_voice}"
+        )
+    else:
+        emit(
+            f"R08Y speech test: provider=edge, voice={config.tts.voice}, "
+            f"rate={config.tts.rate}, pitch={config.tts.pitch}, "
+            f"volume={config.tts.volume}"
+        )
     try:
         await tts.start()
         if not tts.available:
@@ -288,6 +295,82 @@ async def run_speech_test(
         return [SmokeResult("speech_playback", "fail", f"{type(exc).__name__}: {exc}")]
     finally:
         await tts.stop()
+
+
+async def run_wake_word_test(
+    config: R08YConfig,
+    *,
+    voice_factory=None,
+    timeout_seconds: float = 15.0,
+    emit: Callable[[str], None] = print,
+) -> List[SmokeResult]:
+    """Arm only the microphone and verify the configured phrase is detected."""
+    if voice_factory is None:
+        from r08y.modules.voice_input import VoiceInput
+
+        voice_factory = VoiceInput
+    voice = voice_factory(config.audio, config.wake_word)
+    emit(
+        f"R08Y wake-word test starting. This listens only for '{config.wake_word.phrase}'."
+    )
+    try:
+        await voice.start()
+        if not voice.available:
+            return [
+                SmokeResult(
+                    "wake_word",
+                    "fail",
+                    getattr(voice, "capture_detail", "microphone capture unavailable"),
+                )
+            ]
+        if not voice.wake_available:
+            return [
+                SmokeResult(
+                    "wake_word",
+                    "fail",
+                    voice.wake_detail,
+                )
+            ]
+        if voice.wake_engine != "porcupine":
+            return [
+                SmokeResult(
+                    "wake_word",
+                    "fail",
+                    f"expected {config.wake_word.phrase} phrase recognition; "
+                    f"active engine is {voice.wake_engine}",
+                )
+            ]
+        timeout_label = (
+            "1 second"
+            if timeout_seconds == 1
+            else f"{timeout_seconds:.0f} seconds"
+        )
+        emit(
+            f"READY: Say '{config.wake_word.phrase}' once within "
+            f"{timeout_label}."
+        )
+        try:
+            detected = await asyncio.wait_for(
+                voice.wait_for_wake(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            detected = False
+        return [
+            _result(
+                "wake_word",
+                detected,
+                (
+                    f"'{config.wake_word.phrase}' detected by the custom model"
+                    if detected
+                    else (
+                        f"'{config.wake_word.phrase}' was not detected within "
+                        f"{timeout_seconds:.0f} seconds"
+                    )
+                ),
+            )
+        ]
+    finally:
+        await voice.stop()
 
 
 async def run_expression_test(
@@ -364,6 +447,123 @@ async def run_expression_test(
             await expression.stop()
         finally:
             await servo.stop()
+    return results
+
+
+async def run_interaction_test(
+    config: R08YConfig,
+    *,
+    servo_factory=None,
+    expression_factory=None,
+    tts_factory=None,
+    interaction_factory=None,
+    emit: Callable[[str], None] = print,
+) -> List[SmokeResult]:
+    """Audition coordinated voice and bounded pan/tilt body language."""
+    from r08y.modules.expression_controller import (
+        ExpressionController,
+        InteractionState,
+    )
+    from r08y.modules.interaction import InteractionDirector
+    from r08y.modules.servo_controller import create_servo_controller
+    from r08y.modules.text_to_speech import TextToSpeech
+
+    servo_factory = servo_factory or create_servo_controller
+    expression_factory = expression_factory or ExpressionController
+    tts_factory = tts_factory or TextToSpeech
+    interaction_factory = interaction_factory or InteractionDirector
+    servo = servo_factory(config.servos)
+    expression = expression_factory(servo, config.servos, config.expression)
+    tts = tts_factory(config.tts)
+    interaction = interaction_factory(config.interaction)
+    results: List[SmokeResult] = []
+
+    emit("R08Y interaction audition starting. The wheels will not move.")
+    emit("CLEARANCE: Keep hands and cables clear of the camera pan/tilt assembly.")
+    try:
+        await asyncio.gather(servo.start(), tts.start())
+        if not servo.available:
+            return [
+                SmokeResult(
+                    "interaction_audition",
+                    "fail",
+                    f"pan/tilt unavailable: {type(servo).__name__}",
+                )
+            ]
+        if not tts.available:
+            return [
+                SmokeResult(
+                    "interaction_audition",
+                    "fail",
+                    getattr(tts, "output_detail", "speech unavailable"),
+                )
+            ]
+        await expression.start()
+        if not expression.available:
+            return [
+                SmokeResult(
+                    "interaction_audition",
+                    "fail",
+                    "expression controller did not start",
+                )
+            ]
+
+        await expression.home()
+        emit("LISTENING: A quiet cue and acknowledgement gesture will play.")
+        cue_completed = await interaction.acknowledge(tts, expression)
+        lines = (
+            "Hi, Rob. I'm here and ready.",
+            "Would you like to try something curious?",
+            "Got it. We'll take it one step at a time.",
+        )
+        speech_completed = True
+        failure_detail = None
+        for line in lines:
+            emit(f"R08Y: {line}")
+
+            async def begin_body_language(response: str = line) -> None:
+                await expression.set_interaction_state(InteractionState.SPEAKING)
+                await interaction.queue_response_gesture(response, expression)
+
+            played = await tts.speak_and_wait(
+                line,
+                on_playback_start=begin_body_language,
+            )
+            if not played:
+                speech_completed = False
+                failure_detail = getattr(tts, "last_error", None)
+                emit("STOP: Speech synthesis failed. Remaining audition lines were skipped.")
+                break
+        await expression.set_interaction_state(InteractionState.IDLE)
+        await expression.home()
+
+        completed = cue_completed and speech_completed
+        results.append(
+            _result(
+                "interaction_audition",
+                completed,
+                (
+                    "acknowledgement cue and three coordinated responses completed; "
+                    "confirm voice and movement felt natural"
+                    if completed
+                    else (
+                        failure_detail
+                        or "one or more acknowledgement, speech, or motion cues failed"
+                    )
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(
+            SmokeResult(
+                "interaction_audition", "fail", f"{type(exc).__name__}: {exc}"
+            )
+        )
+    finally:
+        try:
+            await expression.stop()
+        finally:
+            await asyncio.gather(servo.stop(), tts.stop(), return_exceptions=True)
     return results
 
 

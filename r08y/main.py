@@ -21,6 +21,7 @@ from r08y.modules.face_detector import FaceDetection, create_face_detector
 from r08y.modules.face_recognizer import FaceRecognizer, RecognitionResult
 from r08y.modules.face_tracker import FaceTracker
 from r08y.modules.expression_controller import ExpressionController, InteractionState
+from r08y.modules.interaction import InteractionDirector
 from r08y.modules.servo_controller import create_servo_controller
 from r08y.modules.voice_input import VoiceInput
 from r08y.modules.speech_to_text import create_stt_provider
@@ -70,6 +71,13 @@ async def vision_pipeline(
     """Continuous vision loop: detect faces, track with servos, recognize."""
     if not camera.available:
         logger.warning("Camera not available — vision pipeline disabled")
+        await shutdown.wait()
+        return
+    if not getattr(face_detector, "available", True):
+        logger.warning(
+            "Face detection unavailable; vision pipeline disabled: %s",
+            getattr(face_detector, "detail", "detector unavailable"),
+        )
         await shutdown.wait()
         return
 
@@ -127,27 +135,45 @@ async def voice_pipeline(
     face_recognizer: FaceRecognizer,
     camera: CameraCapture,
     expression: ExpressionController,
+    interaction: InteractionDirector,
     state: DroidState,
     shutdown: asyncio.Event,
     skill_manager: Optional[SkillManager] = None,
 ) -> None:
     """Event-driven voice loop: wake → record → transcribe → think → speak."""
     if not voice_input.available:
-        logger.warning("Voice input not available — voice pipeline disabled")
+        logger.warning("Voice input not available; voice pipeline disabled")
+        await shutdown.wait()
+        return
+    if not voice_input.wake_available:
+        logger.error(
+            "Voice pipeline disabled: %s",
+            voice_input.wake_detail,
+        )
         await shutdown.wait()
         return
 
-    logger.info("Voice pipeline started — listening for wake word")
+    logger.info(
+        "Voice pipeline started; say '%s'",
+        voice_input.wake_phrase,
+    )
 
     async def set_interaction(state_name: InteractionState) -> None:
         await expression.set_interaction_state(state_name)
 
     async def speak(text: str) -> None:
         state.is_listening = False
-        state.is_speaking = True
-        await set_interaction(InteractionState.SPEAKING)
+
+        async def begin_body_language() -> None:
+            state.is_speaking = True
+            await set_interaction(InteractionState.SPEAKING)
+            await interaction.queue_response_gesture(text, expression)
+
         try:
-            await tts.speak_and_wait(text)
+            await tts.speak_and_wait(
+                text,
+                on_playback_start=begin_body_language,
+            )
         finally:
             state.is_speaking = False
             await set_interaction(InteractionState.IDLE)
@@ -165,7 +191,7 @@ async def voice_pipeline(
         await expression.cancel_motion()
         state.is_listening = True
         await set_interaction(InteractionState.LISTENING)
-        await expression.perform_gesture("acknowledge", wait=False, priority=5)
+        await interaction.acknowledge(tts, expression)
         logger.info("Wake detected — recording speech")
 
         # Record user speech
@@ -216,15 +242,11 @@ async def voice_pipeline(
         # 2. Check built-in special commands
         command = brain.check_special_command(text)
         if command:
-            state.is_speaking = True
-            await set_interaction(InteractionState.SPEAKING)
-            try:
-                await _handle_special_command(
-                    command, text, face_recognizer, tts, state, camera,
-                )
-            finally:
-                state.is_speaking = False
-                await set_interaction(InteractionState.IDLE)
+            command_response = await _handle_special_command(
+                command, text, face_recognizer, state, camera,
+            )
+            if command_response:
+                await speak(command_response)
             continue
 
         # 3. Send to AI brain
@@ -248,52 +270,45 @@ async def _handle_special_command(
     command: str,
     original_text: str,
     face_recognizer: FaceRecognizer,
-    tts: TextToSpeech,
     state: DroidState,
     camera: Optional[CameraCapture],
-) -> None:
+) -> Optional[str]:
     """Handle special droid commands like face registration."""
     if command == "register_face":
         if not state.current_faces:
-            await tts.speak_and_wait("I can't see anyone right now. Look at the camera and try again.")
-            return
+            return "I can't see anyone right now. Look at the camera and try again."
         if camera is None:
-            await tts.speak_and_wait("Camera not available.")
-            return
+            return "Camera not available."
         frame = await camera.get_frame()
         if frame is None:
-            await tts.speak_and_wait("I can't get a clear picture right now.")
-            return
+            return "I can't get a clear picture right now."
         # Extract name from text or ask
         name = _extract_name(original_text)
         if not name:
-            await tts.speak_and_wait("What should I call you?")
-            return  # Would need follow-up recording in full implementation
+            return "What should I call you?"
         primary_face = max(state.current_faces, key=lambda d: d.area)
         success = await face_recognizer.register_face(name, frame, primary_face)
         if success:
-            await tts.speak_and_wait(f"Got it! I'll remember you as {name}.")
-        else:
-            await tts.speak_and_wait("I had trouble saving your face. Try again.")
+            return f"Got it! I'll remember you as {name}."
+        return "I had trouble saving your face. Try again."
 
     elif command == "identify":
         if state.recognized and state.recognized.is_known:
-            await tts.speak_and_wait(f"You're {state.recognized.name}!")
+            return f"You're {state.recognized.name}!"
         elif state.current_faces:
-            await tts.speak_and_wait("I can see you, but I don't recognize you yet. Say 'remember my face' to introduce yourself.")
-        else:
-            await tts.speak_and_wait("I can't see anyone right now.")
+            return "I can see you, but I don't recognize you yet. Say 'remember my face' to introduce yourself."
+        return "I can't see anyone right now."
 
     elif command == "delete_face":
         if state.recognized and state.recognized.is_known:
             name = state.recognized.name
             await face_recognizer.delete_face(name)
-            await tts.speak_and_wait(f"I've forgotten {name}'s face.")
-        else:
-            await tts.speak_and_wait("I don't recognize you, so there's nothing to forget.")
+            return f"I've forgotten {name}'s face."
+        return "I don't recognize you, so there's nothing to forget."
 
     elif command == "patrol":
-        await tts.speak_and_wait("Looking around!")
+        return "Looking around!"
+    return None
 
 
 def _extract_name(text: str) -> Optional[str]:
@@ -370,6 +385,7 @@ async def run(config_path: str = "config.yaml") -> None:
     face_recognizer = FaceRecognizer(config.face_recognition)
     servo = create_servo_controller(config.servos)
     expression = ExpressionController(servo, config.servos, config.expression)
+    interaction = InteractionDirector(config.interaction)
     face_tracker = FaceTracker(
         expression, config.servos, config.tracker, config.camera.width, config.camera.height
     )
@@ -424,6 +440,7 @@ async def run(config_path: str = "config.yaml") -> None:
             distance=distance,
             light_sensors=light_sensors,
             mobility=mobility,
+            face_detector=face_detector,
         )
         state.hardware_status = health.as_dict()
         logger.info("Hardware health: %s", health.summary())
@@ -480,6 +497,11 @@ async def run(config_path: str = "config.yaml") -> None:
                     "R08Y is online, but microphone capture failed. "
                     "Unplug and reconnect my microphone USB cable."
                 )
+            elif not voice_input.wake_available:
+                await tts.speak(
+                    "R08Y is online, but the Roby wake word is not armed. "
+                    "Run the wake word test."
+                )
             else:
                 await tts.speak("R08Y online. Ready when you are.")
 
@@ -503,6 +525,7 @@ async def run(config_path: str = "config.yaml") -> None:
                 face_recognizer,
                 camera,
                 expression,
+                interaction,
                 state,
                 shutdown,
                 skill_manager,

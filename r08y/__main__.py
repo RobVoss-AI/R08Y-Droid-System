@@ -41,6 +41,16 @@ def main():
         help="Run a guided pan/tilt expression test; wheels remain inactive",
     )
     parser.add_argument(
+        "--interaction-test",
+        action="store_true",
+        help="Audition coordinated speech and pan/tilt body language; wheels remain inactive",
+    )
+    parser.add_argument(
+        "--wake-word-test",
+        action="store_true",
+        help="Listen for the configured custom wake word without starting other hardware",
+    )
+    parser.add_argument(
         "--speech-voice",
         help="Temporarily override the voice for --speech-test",
     )
@@ -77,12 +87,20 @@ def main():
 
     config = load_config(args.config)
     speech_overrides = {
-        "voice": args.speech_voice,
         "rate": args.speech_rate,
         "pitch": args.speech_pitch,
     }
-    if any(speech_overrides.values()) and not args.speech_test:
+    if (args.speech_voice or any(speech_overrides.values())) and not args.speech_test:
         parser.error("speech overrides require --speech-test")
+    if config.tts.provider == "huggingface" and (
+        args.speech_rate is not None or args.speech_pitch is not None
+    ):
+        parser.error("speech rate and pitch overrides apply only to the Edge provider")
+    if args.speech_voice is not None:
+        if config.tts.provider == "huggingface":
+            config.tts.huggingface_voice = args.speech_voice
+        else:
+            config.tts.voice = args.speech_voice
     for field, value in speech_overrides.items():
         if value is not None:
             setattr(config.tts, field, value)
@@ -101,15 +119,23 @@ def main():
             args.audio_test,
             args.speech_test,
             args.expression_test,
+            args.interaction_test,
+            args.wake_word_test,
             args.smoke_test,
         )
     )
     if selected_test_modes > 1:
         parser.error(
-            "--audio-test, --speech-test, --expression-test, and --smoke-test "
-            "are separate test modes"
+            "--audio-test, --speech-test, --wake-word-test, --expression-test, "
+            "--interaction-test, and --smoke-test are separate test modes"
         )
-    if (args.audio_test or args.speech_test or args.expression_test) and (
+    if (
+        args.audio_test
+        or args.speech_test
+        or args.expression_test
+        or args.interaction_test
+        or args.wake_word_test
+    ) and (
         args.exercise_hardware or args.exercise_mobility
     ):
         parser.error("hardware exercise flags cannot be combined with guided test modes")
@@ -144,6 +170,21 @@ def main():
         print_smoke_results(results, heading="R08Y speech audition")
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 
+    if args.wake_word_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_wake_word_test
+
+        try:
+            results = asyncio.run(run_wake_word_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y wake-word test stopped.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y ROBY wake-word test")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
     if args.expression_test:
         if errors:
             for error in errors:
@@ -157,6 +198,21 @@ def main():
             print("\nR08Y expression test stopped. Returning pan/tilt home.", flush=True)
             os._exit(130)
         print_smoke_results(results, heading="R08Y guided expression test")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
+    if args.interaction_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_interaction_test
+
+        try:
+            results = asyncio.run(run_interaction_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y interaction audition stopped. Returning pan/tilt home.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y guided interaction audition")
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 
     if args.exercise_mobility and not args.confirm_wheels_raised:

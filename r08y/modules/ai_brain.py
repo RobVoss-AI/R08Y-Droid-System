@@ -103,6 +103,7 @@ class AIBrain:
         """Combine role, spoken-delivery guidance, and current visual context."""
         return (
             f"{self._config.system_prompt}\n\n"
+            f"[Personality: {self._config.personality_profile}]\n"
             f"[Spoken response style: {self._config.spoken_style}]\n"
             f"[Visual context: {context_note}]"
         )

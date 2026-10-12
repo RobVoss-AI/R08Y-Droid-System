@@ -9,6 +9,7 @@ import logging
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
 
 import cv2
@@ -17,6 +18,39 @@ import numpy as np
 from r08y.config import FaceDetectionConfig
 
 logger = logging.getLogger(__name__)
+
+HAAR_CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
+SYSTEM_HAAR_CASCADE_PATHS = (
+    Path("/usr/share/opencv4/haarcascades") / HAAR_CASCADE_FILENAME,
+    Path("/usr/share/opencv/haarcascades") / HAAR_CASCADE_FILENAME,
+    Path("/usr/local/share/opencv4/haarcascades") / HAAR_CASCADE_FILENAME,
+)
+
+
+def resolve_haar_cascade_path(configured_path: Optional[str] = None) -> Optional[Path]:
+    """Find the cascade in pip, Debian, or an explicitly configured location."""
+    candidates = []
+    if configured_path:
+        candidates.append(Path(configured_path).expanduser())
+
+    cv2_data = getattr(cv2, "data", None)
+    packaged_dir = getattr(cv2_data, "haarcascades", None)
+    if packaged_dir:
+        candidates.append(Path(packaged_dir) / HAAR_CASCADE_FILENAME)
+
+    cv2_module_path = getattr(cv2, "__file__", None)
+    if cv2_module_path:
+        candidates.append(
+            Path(cv2_module_path).resolve().parent
+            / "data"
+            / HAAR_CASCADE_FILENAME
+        )
+    candidates.extend(SYSTEM_HAAR_CASCADE_PATHS)
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 @dataclass
@@ -60,11 +94,18 @@ class HaarFaceDetector(FaceDetector):
     def __init__(self, config: FaceDetectionConfig):
         self._config = config
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="haar")
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        self._cascade = cv2.CascadeClassifier(cascade_path)
+        cascade_path = resolve_haar_cascade_path(config.cascade_path)
+        if cascade_path is None:
+            raise RuntimeError(
+                "Haar cascade data was not found. Install opencv-data or set "
+                "face_detection.cascade_path."
+            )
+        self._cascade = cv2.CascadeClassifier(str(cascade_path))
         if self._cascade.empty():
             raise RuntimeError(f"Failed to load Haar cascade from {cascade_path}")
-        logger.info("Haar face detector initialized")
+        self.available = True
+        self.detail = f"Haar cascade loaded from {cascade_path}"
+        logger.info("%s", self.detail)
 
     def detect_sync(self, frame: np.ndarray) -> List[FaceDetection]:
         # Downscale for performance
@@ -113,6 +154,8 @@ class DNNFaceDetector(FaceDetector):
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dnn")
         try:
             self._net = cv2.dnn.readNetFromTensorflow(self.MODEL_FILE, self.CONFIG_FILE)
+            self.available = True
+            self.detail = "OpenCV DNN face detector loaded"
             logger.info("DNN face detector initialized")
         except cv2.error:
             logger.warning(
@@ -147,12 +190,31 @@ class DNNFaceDetector(FaceDetector):
         return detections
 
 
-def create_face_detector(config: FaceDetectionConfig) -> Optional[FaceDetector]:
+class UnavailableFaceDetector(FaceDetector):
+    """Keep non-vision pipelines online when detector data is unavailable."""
+
+    available = False
+
+    def __init__(self, reason: str):
+        self.detail = reason
+
+    def detect_sync(self, frame: np.ndarray) -> List[FaceDetection]:
+        return []
+
+    async def detect(self, frame: np.ndarray) -> List[FaceDetection]:
+        return []
+
+
+def create_face_detector(config: FaceDetectionConfig) -> FaceDetector:
     """Factory: create the configured face detector."""
     if config.method == "dnn":
         try:
             return DNNFaceDetector(config)
         except Exception:
             logger.warning("Falling back to Haar detector")
-            return HaarFaceDetector(config)
-    return HaarFaceDetector(config)
+    try:
+        return HaarFaceDetector(config)
+    except Exception as exc:
+        detail = f"Face detection disabled: {type(exc).__name__}: {exc}"
+        logger.error(detail)
+        return UnavailableFaceDetector(detail)

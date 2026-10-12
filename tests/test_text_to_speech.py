@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from r08y.config import TTSConfig
 from r08y.modules.audio_devices import AudioDevice
 from r08y.modules import text_to_speech
-from r08y.modules.text_to_speech import TextToSpeech
+from r08y.modules.text_to_speech import TextToSpeech, _synthesis_error_detail
 
 
 class MissingSinkResolver:
@@ -110,3 +110,84 @@ def test_synthesis_passes_configured_voice_tone(monkeypatch):
         "pitch": "-8Hz",
         "volume": "+0%",
     }
+
+
+def test_playback_start_callback_runs_after_synthesis_before_audio(monkeypatch):
+    events = []
+
+    class FakeCommunicate:
+        def __init__(self, _text, **_kwargs):
+            return None
+
+        async def save(self, path):
+            Path(path).write_bytes(b"mp3")
+            events.append("synthesized")
+
+    async def run():
+        monkeypatch.setattr(
+            text_to_speech,
+            "edge_tts",
+            SimpleNamespace(Communicate=FakeCommunicate),
+        )
+        tts = TextToSpeech(TTSConfig(playback_command="mpv"))
+
+        async def playback_started():
+            events.append("gesture")
+
+        async def fake_play(_path, is_wav=False):
+            assert not is_wav
+            events.append("audio")
+
+        monkeypatch.setattr(tts, "_play_path", fake_play)
+        await tts._synthesize_and_play(
+            "Hello, Rob.",
+            on_playback_start=playback_started,
+        )
+
+    asyncio.run(run())
+
+    assert events == ["synthesized", "gesture", "audio"]
+
+
+def test_huggingface_speech_plays_native_wav_without_ffmpeg(monkeypatch):
+    events = []
+
+    class FakeHuggingFace:
+        async def synthesize(self, text):
+            events.append(("synthesized", text))
+            return b"RIFFfake-wav"
+
+    async def run():
+        tts = TextToSpeech(
+            TTSConfig(provider="huggingface", playback_command="pw-play")
+        )
+        tts._huggingface = FakeHuggingFace()
+
+        async def fake_play(path, is_wav=False):
+            assert Path(path).read_bytes() == b"RIFFfake-wav"
+            assert is_wav
+            events.append(("played", is_wav))
+
+        monkeypatch.setattr(tts, "_play_path", fake_play)
+        await tts._synthesize_and_play("Hello from Hugging Face.")
+
+    asyncio.run(run())
+
+    assert events == [
+        ("synthesized", "Hello from Hugging Face."),
+        ("played", True),
+    ]
+
+
+def test_http_403_error_hides_signed_url_and_reports_clock_check():
+    class Forbidden(Exception):
+        status = 403
+
+        def __str__(self):
+            return "wss://example.invalid?Sec-MS-GEC=secret-token"
+
+    detail = _synthesis_error_detail(Forbidden())
+
+    assert "HTTP 403" in detail
+    assert "UTC clock" in detail
+    assert "secret-token" not in detail

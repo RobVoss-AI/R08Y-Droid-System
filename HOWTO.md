@@ -87,7 +87,7 @@ For a first clone:
 cd ~
 git clone https://github.com/RobVoss-AI/R08Y-Droid-System.git
 cd R08Y-Droid-System
-git switch codex/r08y-expression-kernel
+git switch codex/roby-wake-word
 bash install.sh
 ```
 
@@ -97,12 +97,12 @@ For an existing clone:
 cd ~/R08Y-Droid-System
 sudo systemctl stop r08y 2>/dev/null || true
 git fetch origin
-git switch codex/r08y-expression-kernel
+git switch codex/roby-wake-word
 git pull --ff-only
 bash install.sh
 ```
 
-The branch command selects the expression work stacked on the audio-integration pull request. After both pull requests are merged, switch back to `main` and use the same pull/install sequence.
+The branch command selects the ROBY wake-word work stacked on the expression and audio-integration pull requests. After the pull requests are merged, switch back to `main` and use the same pull/install sequence.
 
 The installer creates `/opt/r08y`, `/etc/r08y/r08y.env`, and the `r08y.service` unit. It preserves an existing `/opt/r08y/config.yaml`.
 
@@ -119,7 +119,9 @@ Set the keys you use. Do not paste them into chat or commit them:
 ```text
 R08Y_ANTHROPIC_API_KEY=
 R08Y_GROQ_API_KEY=
+R08Y_HF_TOKEN=
 R08Y_PICOVOICE_KEY=
+R08Y_WAKE_WORD_PATH=/opt/r08y/wake_words/roby.ppn
 R08Y_FREENOVE_PATH=/home/rob/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Server
 ```
 
@@ -142,12 +144,34 @@ audio:
   hardware_sample_rate: 16000
   hardware_channels: 2
 
+wake_word:
+  engine: porcupine
+  phrase: ROBY
+  keyword_path: /opt/r08y/wake_words/roby.ppn
+  sensitivity: 0.5
+  allow_rms_fallback: false
+
+stt:
+  provider: huggingface
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_timeout_seconds: 30.0
+  language: en
+
 tts:
+  provider: huggingface
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_voice: Aiden
+  huggingface_instructions: |
+    You are R08Y's voice. Speak only the requested line, preserving its wording.
+    Sound natural, warm, grounded, and quietly curious. Use a measured
+    conversational pace with subtle synthetic precision. Avoid exaggerated
+    brightness, announcer delivery, and cartoon robot effects.
+  huggingface_timeout_seconds: 30.0
   playback_command: pw-play
   output_device_name: XVF3800
-  voice: en-US-GuyNeural
-  rate: "+0%"
-  pitch: "+0Hz"
+  voice: en-US-AndrewMultilingualNeural
+  rate: "+1%"
+  pitch: "+2Hz"
   volume: "+0%"
   set_pipewire_default: true
   require_output_device_match: true
@@ -163,7 +187,35 @@ power:
   ups_enabled: false
 ```
 
-## 6. Validate in six gates
+The deployed Reachy Mini speech service requires a verified Hugging Face account and personal read token. Create a separate R08Y token at [Hugging Face access tokens](https://huggingface.co/settings/tokens). Enter it directly in `/etc/r08y/r08y.env`; do not paste it into chat or a shell command. ROBY wake detection stays local. After wake detection, R08Y sends the recorded utterance to Hugging Face for transcription and sends response text back for speech generation. Claude, local skills, motor safety, and motion choreography remain inside R08Y.
+
+## 6. Add the custom ROBY model
+
+Porcupine custom models are platform-specific. In [Picovoice Console](https://console.picovoice.ai/), create an English wake word spelled `ROBY`, select Raspberry Pi as the target platform, and download the `.ppn` file. Keep the AccessKey in `/etc/r08y/r08y.env`; do not paste it into chat or commit it.
+
+Rename the downloaded file to `roby.ppn`. From a second Mac terminal, copy it to the Pi:
+
+```bash
+scp ~/Downloads/roby.ppn rob@freenove.local:/tmp/roby.ppn
+```
+
+On the Pi, install it in the protected runtime directory:
+
+```bash
+sudo install -o rob -g rob -m 0640 \
+  /tmp/roby.ppn /opt/r08y/wake_words/roby.ppn
+ls -l /opt/r08y/wake_words/roby.ppn
+```
+
+The installer makes the environment file group-readable by the install user. Load it into the current shell without printing its values:
+
+```bash
+set -a
+source /etc/r08y/r08y.env
+set +a
+```
+
+## 7. Validate in seven gates
 
 ### Gate A: configuration only
 
@@ -207,10 +259,13 @@ Confirm both results pass and that the tone is clearly audible. If the tone comm
 After the tone passes, audition the configured speaking voice without starting any other hardware:
 
 ```bash
+set -a
+source /etc/r08y/r08y.env
+set +a
 ./venv/bin/python -m r08y --config config.yaml --speech-test
 ```
 
-This says one fixed sentence using `tts.voice`, `rate`, `pitch`, and `volume`. Adjust one value at a time in `config.yaml`, validate the configuration, and rerun the speech test. Keep speaker loudness in the XVF3800 mixer; use `tts.volume` only for relative speech adjustment.
+This says one fixed sentence with the selected Hugging Face voice. Start with `Aiden`, the Reachy Mini default. Other supported voices are `Ryan`, `Dylan`, `Eric`, `Ono_Anna`, `Serena`, `Sohee`, `Uncle_Fu`, and `Vivian`. Adjust one value at a time in `config.yaml`, validate the configuration, and rerun the speech test. Keep speaker loudness in the XVF3800 mixer.
 
 R08Y resolves the XVF3800 with `arecord -l`, then opens that current card/device at its verified native `S16_LE`, two-channel, 16 kHz capture format. It does not store card 3 as a fixed setting. Capture reads have a hard deadline, and audio is downmixed to 16 kHz mono for the wake word and STT. Other USB microphones retain the PyAudio fallback.
 
@@ -229,7 +284,27 @@ cd /opt/r08y
 ./venv/bin/python -m r08y --config config.yaml --audio-test
 ```
 
-### Gate D: guided expression test
+### Gate D: ROBY wake-word test
+
+This step starts only microphone capture and the custom wake-word detector:
+
+```bash
+cd /opt/r08y
+set -a
+source /etc/r08y/r08y.env
+set +a
+./venv/bin/python -m r08y --config config.yaml --wake-word-test
+```
+
+Wait for `READY`, say “ROBY” once, then stop talking. The test ends immediately on detection or after 15 seconds. Expected result:
+
+```text
+[PASS] wake_word: 'ROBY' detected by the custom model
+```
+
+If it reports a missing AccessKey or model, fix that exact item. Do not enable RMS fallback for normal use; it responds to volume rather than the word ROBY.
+
+### Gate E: guided expression test
 
 Stop the service and clear hands and cables from the camera pan/tilt assembly:
 
@@ -241,7 +316,49 @@ cd /opt/r08y
 
 This command does not initialize mobility. R08Y performs seven bounded gestures, reports each one before it begins, and returns pan/tilt home. Confirm that movement is smooth, remains inside the physical clearance, and does not bind. Press Ctrl-C to cancel if anything catches or strains.
 
-### Gate E: camera, pan/tilt, sensors, microphone, and speaker
+### Gate F: coordinated interaction audition
+
+Keep the service stopped and the pan/tilt assembly clear:
+
+```bash
+cd /opt/r08y
+set -a
+source /etc/r08y/r08y.env
+set +a
+./venv/bin/python -m r08y --config config.yaml --interaction-test
+```
+
+This command starts only the speaker and pan/tilt. It plays the quiet ROBY acknowledgement cue, then speaks three short lines with restrained greeting, curious, and pleased gestures. Confirm that the cue is audible without being intrusive, speech remains clear, and movement supports the words without distracting from them. The wheels never initialize.
+
+Adjust only `interaction.cue_gain` if the acknowledgement cue needs tuning. Keep it between `0.0` and `0.5`; the example value is `0.14`.
+
+If `provider: edge` reports HTTP 403, verify the Pi clock before changing the voice or audio configuration:
+
+```bash
+timedatectl status
+date -u
+/opt/r08y/venv/bin/edge-tts --version
+```
+
+`System clock synchronized` must be `yes`, and the UTC time must be current. Edge TTS signs requests from the current time, so a stale Raspberry Pi clock can make an otherwise valid request fail authorization. If the clock is wrong:
+
+```bash
+sudo timedatectl set-ntp true
+sudo systemctl restart systemd-timesyncd
+timedatectl status
+```
+
+Then rerun `--speech-test` before the full interaction audition. If the clock is synchronized, Edge TTS is `7.2.8`, and HTTP 403 continues, treat it as an upstream service or network rejection rather than an XVF3800 failure.
+
+For `provider: huggingface`, a token failure is separate from the audio path. Confirm the account is verified and the secret is present without printing it:
+
+```bash
+sudo grep -q '^R08Y_HF_TOKEN=hf_' /etc/r08y/r08y.env && echo "Hugging Face token is configured"
+```
+
+If that check passes but allocation is rejected, replace the token with a new personal read token. Do not switch the XVF3800 device or mixer settings for an authentication error.
+
+### Gate G: camera, pan/tilt, sensors, microphone, and speaker
 
 Keep the wheels raised:
 
@@ -261,7 +378,7 @@ Confirm all of the following:
 
 The command says not to speak during startup, prints `READY` before its two-second microphone sample, and tells you when the sample is complete. Pressing Ctrl-C exits the diagnostic process immediately if a native camera operation is stuck.
 
-### Gate F: guarded motor exercise
+### Gate H: guarded motor exercise
 
 Verify again that every wheel is clear. Then run:
 
@@ -282,7 +399,7 @@ wheel_scale: [1.0, -1.0, 1.0, 1.0]  # reverse rear-left only
 
 Do not change upstream Freenove pin or channel assignments in R08Y.
 
-## 7. Start the service
+## 8. Start the service
 
 ```bash
 sudo systemctl start r08y
@@ -294,13 +411,14 @@ Expected first-run behavior:
 
 1. Each available component reports ready in the health summary.
 2. R08Y says, “R08Y online. Ready when you are.”
-3. The wake word starts a voice turn.
+3. Saying “ROBY” starts a voice turn.
 4. The camera tracks a face through the expression controller.
-5. R08Y makes a small acknowledgement after the wake word, holds still while listening, shifts gently while thinking, and adds a restrained speaking bob.
-6. “How far?” reports ultrasonic distance.
-7. “Check light sensors” reports both sensor voltages.
-8. “Move forward” runs briefly only when valid clearance is available.
-9. “Stop wheels” sends an immediate zero-duty command.
+5. R08Y plays a quiet acknowledgement cue and makes a small nod after the wake word.
+6. Each response uses no more than one meaning-aware gesture while the restrained speaking bob continues.
+7. “How far?” reports ultrasonic distance.
+8. “Check light sensors” reports both sensor voltages.
+9. “Move forward” runs briefly only when valid clearance is available.
+10. “Stop wheels” sends an immediate zero-duty command.
 
 For the shortest live audio acceptance test, keep a second terminal on the log:
 
@@ -308,7 +426,7 @@ For the shortest live audio acceptance test, keep a second terminal on the log:
 journalctl -u r08y -f
 ```
 
-Listen for “R08Y online. Ready when you are.” Then say the configured wake word, pause briefly, and say, “Tell me your name in one sentence.” The log should show wake detection, a non-empty transcription, and an AI response. The response should play through the XVF3800 speaker.
+Listen for “R08Y online. Ready when you are.” Say “ROBY” by itself. Wait for the short rising cue, then say, “Tell me your name in one sentence.” The log should show `Wake word 'ROBY' detected`, a non-empty transcription, and an AI response. The response should play through the XVF3800 speaker with one restrained gesture.
 
 Useful service controls:
 
@@ -318,7 +436,7 @@ sudo systemctl stop r08y
 journalctl -u r08y -n 200 --no-pager
 ```
 
-## 8. Hold the UPS as a separate change
+## 9. Hold the UPS as a separate change
 
 Do not install the UPS HAT during the speaker and full-system acceptance pass. Once camera, voice, sensors, and motors pass on direct USB-C power:
 
@@ -335,6 +453,9 @@ Do not install the UPS HAT during the speaker and full-system acceptance pass. O
 - Immediate XVF3800 capture I/O error: stop R08Y, physically unplug/replug XVF3800 USB with the 10-second waits above, then rerun Gate C. Reboots alone may not clear this state.
 - No microphone samples without an I/O error: confirm the XVF3800 by name in both `arecord -l` and `wpctl status -n`, then rerun Gate C.
 - No sound: verify the speaker is on the documented JST connector and confirm the XVF3800 sink and volume.
+- ROBY not armed: confirm `R08Y_PICOVOICE_KEY` is set locally, `R08Y_WAKE_WORD_PATH` points to the installed Raspberry Pi `.ppn`, source the environment for manual tests, and rerun Gate D.
+- ROBY test times out: face the array, say only “ROBY” at normal conversational volume, and raise `wake_word.sensitivity` in small steps. Keep the value between `0.0` and `1.0`.
+- `cv2` has no attribute `data`: pull the current branch and rerun `bash install.sh`. The installer adds Debian's `opencv-data`, and R08Y now resolves its system cascade path directly. If cascade data is still unavailable, face detection is disabled while voice remains online.
 - No camera frame: list `/dev/video*`, then set `camera.device_path` only after identifying the correct node.
 - Forward blocked: fix the ultrasonic reading. Do not disable the guard for normal operation.
 - Motor direction wrong: correct `wheel_scale` with wheels raised. Do not guess at GPIO or PWM mappings.
