@@ -149,6 +149,36 @@ def test_playback_start_callback_runs_after_synthesis_before_audio(monkeypatch):
     assert events == ["synthesized", "gesture", "audio"]
 
 
+def test_huggingface_speech_plays_native_wav_without_ffmpeg(monkeypatch):
+    events = []
+
+    class FakeHuggingFace:
+        async def synthesize(self, text):
+            events.append(("synthesized", text))
+            return b"RIFFfake-wav"
+
+    async def run():
+        tts = TextToSpeech(
+            TTSConfig(provider="huggingface", playback_command="pw-play")
+        )
+        tts._huggingface = FakeHuggingFace()
+
+        async def fake_play(path, is_wav=False):
+            assert Path(path).read_bytes() == b"RIFFfake-wav"
+            assert is_wav
+            events.append(("played", is_wav))
+
+        monkeypatch.setattr(tts, "_play_path", fake_play)
+        await tts._synthesize_and_play("Hello from Hugging Face.")
+
+    asyncio.run(run())
+
+    assert events == [
+        ("synthesized", "Hello from Hugging Face."),
+        ("played", True),
+    ]
+
+
 def test_http_403_error_hides_signed_url_and_reports_clock_check():
     class Forbidden(Exception):
         status = 403

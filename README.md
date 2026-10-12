@@ -10,7 +10,7 @@ In development. XVF3800 capture and speaker playback have been verified on the P
 
 - Python 3.11+ with `asyncio` pipelines for vision, voice, and skills
 - Official Freenove FNK0043 Python modules behind R08Y hardware adapters
-- OpenCV/Picamera2, ALSA/PyAudio, PipeWire, Porcupine, Whisper, Claude, and Edge TTS
+- OpenCV/Picamera2, ALSA/PyAudio, PipeWire, Porcupine, Whisper, Claude, and Hugging Face realtime speech
 - SQLite for face encodings and conversation history
 - `systemd` service for Debian 13 and Raspberry Pi OS, including the user PipeWire runtime
 
@@ -54,7 +54,7 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 - One expression controller owns every runtime pan/tilt write. Face tracking and skills submit bounded gaze targets or named gestures to its queue.
 - Conversational states add restrained idle, listening, thinking, and speaking motion. `--expression-test` exercises only pan/tilt and never initializes wheel movement.
 - The interaction director adds a quiet acknowledgement cue after ROBY, chooses at most one meaning-aware gesture per response, and leaves neutral replies unembellished. `--interaction-test` auditions the speaker and pan/tilt together without initializing mobility.
-- Edge TTS HTTP failures are summarized without printing signed request URLs. The interaction audition stops after the first synthesis failure and preserves a clear distinction between upstream synthesis and local XVF3800 playback.
+- Hugging Face realtime speech uses the Reachy Mini session service and its Qwen3-TTS voices. The provider token and allocated WebSocket URL are never logged. Edge remains a manual fallback.
 - No-face patrol scanning is disabled by default. After losing a face, R08Y returns its gaze to center and retains only the restrained idle sway; full-range scanning requires `tracker.patrol_enabled: true`.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
 - `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
@@ -64,10 +64,10 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 ## Architecture
 
 ```text
-XVF3800 USB input -> ROBY model -> record -> Whisper STT
+XVF3800 USB input -> ROBY model -> record -> HF realtime STT
                                              |
                                              v
-Freenove sensors -> skill commands ------> Claude -> Edge TTS -> XVF3800 output
+Freenove sensors -> skill commands ------> Claude -> HF realtime voice -> XVF3800 output
        |                 |
        |                 +-> guarded mecanum mobility
        v
@@ -123,12 +123,13 @@ Copy `config.example.yaml` to `config.yaml`. Put secrets in the environment file
 R08Y_ANTHROPIC_API_KEY=
 R08Y_GROQ_API_KEY=
 R08Y_OPENAI_API_KEY=
+R08Y_HF_TOKEN=
 R08Y_PICOVOICE_KEY=
 R08Y_WAKE_WORD_PATH=/opt/r08y/wake_words/roby.ppn
 R08Y_FREENOVE_PATH=
 ```
 
-The minimum conversational path uses Anthropic, Groq or OpenAI for transcription, a Raspberry Pi Porcupine model for the ROBY wake word, and Edge TTS for speech. Generate the platform-specific custom model in [Picovoice Console](https://console.picovoice.ai/) and keep it outside Git. Weather uses Open-Meteo without an API key.
+The example path keeps ROBY wake detection local, sends the recorded utterance to Hugging Face for realtime transcription, uses Claude and R08Y's local skills for the response, then sends response text to the same Hugging Face service for a Reachy-style voice. The deployed service requires a verified personal read token. Generate the platform-specific custom wake model in [Picovoice Console](https://console.picovoice.ai/) and keep both credentials outside Git. Groq and OpenAI transcription remain fallback providers. Weather uses Open-Meteo without an API key.
 
 The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/models/overview) and [`whisper-large-v3`](https://console.groq.com/docs/model/whisper-large-v3). Both identifiers were checked against their providers’ model documentation on October 4, 2026.
 
@@ -150,13 +151,12 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 # Detect ROBY with the configured custom model; no camera, servos, or motors
 ./venv/bin/python -m r08y --config config.yaml --wake-word-test
 
-# Speak a fixed sentence with the configured voice, rate, pitch, and volume
+# Speak a fixed sentence with the configured provider and voice
 ./venv/bin/python -m r08y --config config.yaml --speech-test
 
 # Audition a voice without changing config.yaml
 ./venv/bin/python -m r08y --config config.yaml --speech-test \
-  --speech-voice en-US-AndrewMultilingualNeural \
-  --speech-rate=+1% --speech-pitch=+2Hz
+  --speech-voice Aiden
 
 # Guided personality gestures; pan/tilt only, wheels never initialize
 ./venv/bin/python -m r08y --config config.yaml --expression-test

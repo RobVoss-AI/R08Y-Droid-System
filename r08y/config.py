@@ -127,6 +127,11 @@ class STTConfig:
     provider: str = "groq"
     openai_api_key: str = ""
     groq_api_key: str = ""
+    huggingface_token: str = ""
+    huggingface_session_url: str = (
+        "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
+    )
+    huggingface_timeout_seconds: float = 30.0
     model: str = "whisper-large-v3"
     language: str = "en"
 
@@ -161,10 +166,23 @@ class AIConfig:
 
 @dataclass
 class TTSConfig:
+    provider: str = "edge"
     voice: str = "en-US-AndrewMultilingualNeural"
     rate: str = "+1%"
     pitch: str = "+2Hz"
     volume: str = "+0%"
+    huggingface_token: str = ""
+    huggingface_session_url: str = (
+        "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
+    )
+    huggingface_voice: str = "Aiden"
+    huggingface_instructions: str = (
+        "You are R08Y's voice. Speak only the requested line, preserving its wording. "
+        "Sound natural, warm, grounded, and quietly curious. Use a measured conversational "
+        "pace with subtle synthetic precision. Avoid exaggerated brightness, announcer "
+        "delivery, and cartoon robot effects."
+    )
+    huggingface_timeout_seconds: float = 30.0
     playback_command: str = "pw-play"
     output_device_name: str = "XVF3800"
     output_target: Optional[str] = None
@@ -276,6 +294,10 @@ def _apply_env_overrides(config: R08YConfig) -> None:
         value = os.environ.get(env_var)
         if value:
             setattr(getattr(config, section), attr, value)
+    huggingface_token = os.environ.get("R08Y_HF_TOKEN")
+    if huggingface_token:
+        config.stt.huggingface_token = huggingface_token
+        config.tts.huggingface_token = huggingface_token
 
 
 def load_config(config_path: str = "config.yaml") -> R08YConfig:
@@ -336,6 +358,12 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("audio capture_backend must be auto, alsa, or pyaudio")
     if config.wake_word.engine not in {"porcupine", "rms"}:
         errors.append("wake_word engine must be porcupine or rms")
+    if config.stt.provider not in {"huggingface", "groq", "openai"}:
+        errors.append("stt provider must be huggingface, groq, or openai")
+    if config.stt.huggingface_timeout_seconds <= 0:
+        errors.append("stt huggingface_timeout_seconds must be positive")
+    if not config.stt.huggingface_session_url.startswith("https://"):
+        errors.append("stt huggingface_session_url must use https")
     if config.face_detection.method not in {"haar", "dnn"}:
         errors.append("face_detection method must be haar or dnn")
     if not config.wake_word.phrase.strip():
@@ -348,12 +376,23 @@ def validate_config(config: R08YConfig) -> List[str]:
         and not config.wake_word.keyword_path.casefold().endswith(".ppn")
     ):
         errors.append("wake_word keyword_path must point to a custom .ppn model")
+    if config.tts.provider not in {"huggingface", "edge"}:
+        errors.append("tts provider must be huggingface or edge")
     if not re.fullmatch(r"[+-]\d+%", config.tts.rate):
         errors.append("tts rate must use a signed percentage such as +0% or -10%")
     if not re.fullmatch(r"[+-]\d+Hz", config.tts.pitch):
         errors.append("tts pitch must use signed Hz such as +0Hz or -10Hz")
     if not re.fullmatch(r"[+-]\d+%", config.tts.volume):
         errors.append("tts volume must use a signed percentage such as +0% or -10%")
+    if config.tts.huggingface_timeout_seconds <= 0:
+        errors.append("tts huggingface_timeout_seconds must be positive")
+    if not config.tts.huggingface_session_url.startswith("https://"):
+        errors.append("tts huggingface_session_url must use https")
+    if config.tts.huggingface_voice not in {
+        "Aiden", "Ryan", "Dylan", "Eric", "Ono_Anna", "Serena", "Sohee",
+        "Uncle_Fu", "Vivian",
+    }:
+        errors.append("tts huggingface_voice is not supported by the Reachy backend")
     if config.servos.driver == "gpio" and (
         config.servos.gpio_pan_pin is None or config.servos.gpio_tilt_pin is None
     ):

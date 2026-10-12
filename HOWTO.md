@@ -119,6 +119,7 @@ Set the keys you use. Do not paste them into chat or commit them:
 ```text
 R08Y_ANTHROPIC_API_KEY=
 R08Y_GROQ_API_KEY=
+R08Y_HF_TOKEN=
 R08Y_PICOVOICE_KEY=
 R08Y_WAKE_WORD_PATH=/opt/r08y/wake_words/roby.ppn
 R08Y_FREENOVE_PATH=/home/rob/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Server
@@ -150,7 +151,22 @@ wake_word:
   sensitivity: 0.5
   allow_rms_fallback: false
 
+stt:
+  provider: huggingface
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_timeout_seconds: 30.0
+  language: en
+
 tts:
+  provider: huggingface
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_voice: Aiden
+  huggingface_instructions: |
+    You are R08Y's voice. Speak only the requested line, preserving its wording.
+    Sound natural, warm, grounded, and quietly curious. Use a measured
+    conversational pace with subtle synthetic precision. Avoid exaggerated
+    brightness, announcer delivery, and cartoon robot effects.
+  huggingface_timeout_seconds: 30.0
   playback_command: pw-play
   output_device_name: XVF3800
   voice: en-US-AndrewMultilingualNeural
@@ -170,6 +186,8 @@ mobility:
 power:
   ups_enabled: false
 ```
+
+The deployed Reachy Mini speech service requires a verified Hugging Face account and personal read token. Create a separate R08Y token at [Hugging Face access tokens](https://huggingface.co/settings/tokens). Enter it directly in `/etc/r08y/r08y.env`; do not paste it into chat or a shell command. ROBY wake detection stays local. After wake detection, R08Y sends the recorded utterance to Hugging Face for transcription and sends response text back for speech generation. Claude, local skills, motor safety, and motion choreography remain inside R08Y.
 
 ## 6. Add the custom ROBY model
 
@@ -241,10 +259,13 @@ Confirm both results pass and that the tone is clearly audible. If the tone comm
 After the tone passes, audition the configured speaking voice without starting any other hardware:
 
 ```bash
+set -a
+source /etc/r08y/r08y.env
+set +a
 ./venv/bin/python -m r08y --config config.yaml --speech-test
 ```
 
-This says one fixed sentence using `tts.voice`, `rate`, `pitch`, and `volume`. Adjust one value at a time in `config.yaml`, validate the configuration, and rerun the speech test. Keep speaker loudness in the XVF3800 mixer; use `tts.volume` only for relative speech adjustment.
+This says one fixed sentence with the selected Hugging Face voice. Start with `Aiden`, the Reachy Mini default. Other supported voices are `Ryan`, `Dylan`, `Eric`, `Ono_Anna`, `Serena`, `Sohee`, `Uncle_Fu`, and `Vivian`. Adjust one value at a time in `config.yaml`, validate the configuration, and rerun the speech test. Keep speaker loudness in the XVF3800 mixer.
 
 R08Y resolves the XVF3800 with `arecord -l`, then opens that current card/device at its verified native `S16_LE`, two-channel, 16 kHz capture format. It does not store card 3 as a fixed setting. Capture reads have a hard deadline, and audio is downmixed to 16 kHz mono for the wake word and STT. Other USB microphones retain the PyAudio fallback.
 
@@ -301,6 +322,9 @@ Keep the service stopped and the pan/tilt assembly clear:
 
 ```bash
 cd /opt/r08y
+set -a
+source /etc/r08y/r08y.env
+set +a
 ./venv/bin/python -m r08y --config config.yaml --interaction-test
 ```
 
@@ -308,7 +332,7 @@ This command starts only the speaker and pan/tilt. It plays the quiet ROBY ackno
 
 Adjust only `interaction.cue_gain` if the acknowledgement cue needs tuning. Keep it between `0.0` and `0.5`; the example value is `0.14`.
 
-If speech synthesis reports HTTP 403, verify the Pi clock before changing the voice or audio configuration:
+If `provider: edge` reports HTTP 403, verify the Pi clock before changing the voice or audio configuration:
 
 ```bash
 timedatectl status
@@ -325,6 +349,14 @@ timedatectl status
 ```
 
 Then rerun `--speech-test` before the full interaction audition. If the clock is synchronized, Edge TTS is `7.2.8`, and HTTP 403 continues, treat it as an upstream service or network rejection rather than an XVF3800 failure.
+
+For `provider: huggingface`, a token failure is separate from the audio path. Confirm the account is verified and the secret is present without printing it:
+
+```bash
+sudo grep -q '^R08Y_HF_TOKEN=hf_' /etc/r08y/r08y.env && echo "Hugging Face token is configured"
+```
+
+If that check passes but allocation is rejected, replace the token with a new personal read token. Do not switch the XVF3800 device or mixer settings for an authentication error.
 
 ### Gate G: camera, pan/tilt, sensors, microphone, and speaker
 

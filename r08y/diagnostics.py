@@ -257,10 +257,17 @@ async def run_speech_test(
         "Hi, Rob. I'm R08Y, and my audio systems are online. "
         "Ready when you are."
     )
-    emit(
-        f"R08Y speech test: voice={config.tts.voice}, rate={config.tts.rate}, "
-        f"pitch={config.tts.pitch}, volume={config.tts.volume}"
-    )
+    if config.tts.provider == "huggingface":
+        emit(
+            "R08Y speech test: provider=huggingface, "
+            f"voice={config.tts.huggingface_voice}"
+        )
+    else:
+        emit(
+            f"R08Y speech test: provider=edge, voice={config.tts.voice}, "
+            f"rate={config.tts.rate}, pitch={config.tts.pitch}, "
+            f"volume={config.tts.volume}"
+        )
     try:
         await tts.start()
         if not tts.available:

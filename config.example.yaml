@@ -103,9 +103,11 @@ wake_word:
   allow_rms_fallback: false  # Never substitute a generic sound trigger in normal use
 
 stt:
-  provider: groq
+  provider: huggingface
   openai_api_key: ""
   groq_api_key: ""
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_timeout_seconds: 30.0
   model: whisper-large-v3
   language: en
 
@@ -135,6 +137,17 @@ ai:
   conversations_db_path: data/conversations.db
 
 tts:
+  provider: huggingface
+  # Authenticated Reachy Mini realtime endpoint. Keep the token in /etc/r08y/r08y.env.
+  huggingface_session_url: https://pollen-robotics-reachy-mini-realtime-url.hf.space/session
+  huggingface_voice: Aiden
+  huggingface_instructions: |
+    You are R08Y's voice. Speak only the requested line, preserving its wording.
+    Sound natural, warm, grounded, and quietly curious. Use a measured
+    conversational pace with subtle synthetic precision. Avoid exaggerated
+    brightness, announcer delivery, and cartoon robot effects.
+  huggingface_timeout_seconds: 30.0
+  # Edge remains available as a manual fallback provider.
   voice: en-US-AndrewMultilingualNeural
   rate: "+1%"
   pitch: "+2Hz"

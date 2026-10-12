@@ -1,8 +1,4 @@
-"""Speech-to-text module for R08Y.
-
-Supports OpenAI Whisper and Groq Whisper APIs behind a common interface.
-Sends WAV audio bytes and returns transcribed text.
-"""
+"""Speech-to-text providers behind R08Y's normalized WAV interface."""
 
 import asyncio
 import io
@@ -11,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 from r08y.config import STTConfig
+from r08y.modules.huggingface_speech import HuggingFaceTranscriber, safe_exception_detail
 
 logger = logging.getLogger(__name__)
 
@@ -88,18 +85,43 @@ class GroqWhisperSTT(STTProvider):
             return ""
 
 
+class HuggingFaceRealtimeSTT(STTProvider):
+    """Speech-to-text through the authenticated Reachy Mini realtime service."""
+
+    def __init__(self, config: STTConfig):
+        self._transcriber = HuggingFaceTranscriber(
+            token=config.huggingface_token,
+            session_url=config.huggingface_session_url,
+            language=config.language,
+            timeout_seconds=config.huggingface_timeout_seconds,
+        )
+
+    async def transcribe(self, audio_bytes: bytes) -> str:
+        try:
+            text = (await self._transcriber.transcribe(audio_bytes)).strip()
+            logger.info("Hugging Face STT: '%s'", text[:100])
+            return text
+        except Exception as exc:
+            logger.error("Hugging Face transcription failed: %s", safe_exception_detail(exc))
+            return ""
+
+
 def create_stt_provider(config: STTConfig) -> Optional[STTProvider]:
     """Factory: create the configured STT provider."""
+    if config.provider == "huggingface":
+        if not config.huggingface_token or config.huggingface_token.startswith("YOUR_"):
+            logger.warning("Hugging Face token not configured; STT disabled")
+            return None
+        return HuggingFaceRealtimeSTT(config)
     if config.provider == "openai":
         if not config.openai_api_key or config.openai_api_key.startswith("YOUR_"):
             logger.warning("OpenAI API key not configured — STT disabled")
             return None
         return OpenAIWhisperSTT(config)
-    elif config.provider == "groq":
+    if config.provider == "groq":
         if not config.groq_api_key or config.groq_api_key.startswith("YOUR_"):
             logger.warning("Groq API key not configured — STT disabled")
             return None
         return GroqWhisperSTT(config)
-    else:
-        logger.error("Unknown STT provider: %s", config.provider)
-        return None
+    logger.error("Unknown STT provider: %s", config.provider)
+    return None

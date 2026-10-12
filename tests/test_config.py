@@ -12,7 +12,10 @@ def test_example_config_is_valid():
     assert config.audio.hardware_sample_rate == 16000
     assert config.audio.hardware_channels == 2
     assert config.audio.capture_backend == "auto"
+    assert config.stt.provider == "huggingface"
     assert config.tts.playback_command == "pw-play"
+    assert config.tts.provider == "huggingface"
+    assert config.tts.huggingface_voice == "Aiden"
     assert config.tts.voice == "en-US-AndrewMultilingualNeural"
     assert config.tts.rate == "+1%"
     assert config.tts.pitch == "+2Hz"
@@ -109,6 +112,47 @@ def test_invalid_tts_adjustments_are_rejected(tmp_path):
     assert any("tts rate" in error for error in errors)
     assert any("tts pitch" in error for error in errors)
     assert any("tts volume" in error for error in errors)
+
+
+def test_invalid_tts_provider_and_timeout_are_rejected(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "tts:\n"
+        "  provider: unknown\n"
+        "  huggingface_timeout_seconds: 0\n"
+    )
+
+    errors = validate_config(load_config(str(config_file)))
+
+    assert any("tts provider" in error for error in errors)
+    assert any("huggingface_timeout_seconds" in error for error in errors)
+
+
+def test_invalid_stt_provider_and_huggingface_settings_are_rejected(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "stt:\n"
+        "  provider: unknown\n"
+        "  huggingface_session_url: http://example.invalid/session\n"
+        "  huggingface_timeout_seconds: 0\n"
+    )
+
+    errors = validate_config(load_config(str(config_file)))
+
+    assert any("stt provider" in error for error in errors)
+    assert any("stt huggingface_session_url" in error for error in errors)
+    assert any("stt huggingface_timeout_seconds" in error for error in errors)
+
+
+def test_huggingface_token_comes_from_environment(monkeypatch, tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("tts:\n  provider: huggingface\n")
+    monkeypatch.setenv("R08Y_HF_TOKEN", "hf-environment")
+
+    config = load_config(str(config_file))
+
+    assert config.stt.huggingface_token == "hf-environment"
+    assert config.tts.huggingface_token == "hf-environment"
 
 
 def test_invalid_expression_motion_is_rejected(tmp_path):

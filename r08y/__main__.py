@@ -87,12 +87,20 @@ def main():
 
     config = load_config(args.config)
     speech_overrides = {
-        "voice": args.speech_voice,
         "rate": args.speech_rate,
         "pitch": args.speech_pitch,
     }
-    if any(speech_overrides.values()) and not args.speech_test:
+    if (args.speech_voice or any(speech_overrides.values())) and not args.speech_test:
         parser.error("speech overrides require --speech-test")
+    if config.tts.provider == "huggingface" and (
+        args.speech_rate is not None or args.speech_pitch is not None
+    ):
+        parser.error("speech rate and pitch overrides apply only to the Edge provider")
+    if args.speech_voice is not None:
+        if config.tts.provider == "huggingface":
+            config.tts.huggingface_voice = args.speech_voice
+        else:
+            config.tts.voice = args.speech_voice
     for field, value in speech_overrides.items():
         if value is not None:
             setattr(config.tts, field, value)
