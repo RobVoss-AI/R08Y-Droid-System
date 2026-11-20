@@ -84,6 +84,7 @@ async def collect_runtime_health(
     light_sensors,
     mobility,
     face_detector=None,
+    battery=None,
 ) -> HealthReport:
     """Describe initialized components and sample passive sensors once."""
     report = HealthReport()
@@ -158,8 +159,24 @@ async def collect_runtime_health(
         "DNS available" if network_ok else "network not confirmed",
     )
     report.components["power"] = await asyncio.to_thread(_read_throttle)
-    report.components["ups"] = ComponentHealth(
-        "skip" if not config.power.ups_enabled else "warn",
-        "not integrated" if not config.power.ups_enabled else (config.power.ups_model or "configured without monitor"),
-    )
+    report.components["ups"] = await _ups_health(config, battery)
     return report
+
+
+async def _ups_health(config: R08YConfig, battery) -> ComponentHealth:
+    if not config.power.ups_enabled:
+        return ComponentHealth("skip", "not integrated")
+    if battery is None or not getattr(battery, "available", False):
+        return ComponentHealth(
+            "warn",
+            getattr(battery, "detail", None) or f"{config.power.ups_model}: monitor not started",
+        )
+    reading = await battery.read()
+    if reading is None:
+        return ComponentHealth("warn", "UPS HAT (D) returned no reading")
+    status = (
+        "warn"
+        if not reading.charging and reading.percent <= config.power.low_battery_percent
+        else "pass"
+    )
+    return ComponentHealth(status, f"UPS HAT (D): {reading.describe()}")

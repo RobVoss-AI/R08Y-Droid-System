@@ -2,7 +2,7 @@
 
 This guide is for Rob’s current build: Raspberry Pi 4B on Debian 13, Freenove 4WD mecanum chassis, Freenove camera and pan/tilt, ultrasonic and light sensors, XVF3800 USB four-microphone array, and a Seeed-compatible 4-ohm 5-watt speaker.
 
-The UPS HAT and battery are deliberately excluded from this procedure.
+The UPS HAT and battery are deliberately excluded until section 9.
 
 ## 1. Prepare the robot
 
@@ -399,6 +399,20 @@ wheel_scale: [1.0, -1.0, 1.0, 1.0]  # reverse rear-left only
 
 Do not change upstream Freenove pin or channel assignments in R08Y.
 
+### Gate I: Claude tools chat test
+
+Keep the service stopped. This starts the camera, pan/tilt, and passive sensors, but never the wheels or audio:
+
+```bash
+cd /opt/r08y
+set -a
+source /etc/r08y/r08y.env
+set +a
+./venv/bin/python -m r08y --config config.yaml --chat-test
+```
+
+Type "What do you see?", "Look to your left.", "How far is the wall?", and "Bye for now." Each one should log a `Claude tool:` line and move or answer as described in [docs/AI_INTERACTION.md](docs/AI_INTERACTION.md#test-sequence-on-the-pi). Type `quit` to finish; pan/tilt returns home.
+
 ## 8. Start the service
 
 ```bash
@@ -419,6 +433,9 @@ Expected first-run behavior:
 8. “Check light sensors” reports both sensor voltages.
 9. “Move forward” runs briefly only when valid clearance is available.
 10. “Stop wheels” sends an immediate zero-duty command.
+11. “What do you see?” plays a short line, takes a photo, and describes it.
+12. For 6 seconds after each reply, R08Y answers a follow-up without ROBY. The log shows `Follow-up window closed` when it returns to waiting for ROBY.
+13. While R08Y talks, the head sways and nods more on louder words.
 
 For the shortest live audio acceptance test, keep a second terminal on the log:
 
@@ -441,10 +458,13 @@ journalctl -u r08y -n 200 --no-pager
 Do not install the UPS HAT during the speaker and full-system acceptance pass. Once camera, voice, sensors, and motors pass on direct USB-C power:
 
 1. Record the clean smoke-test output.
-2. Identify the exact UPS HAT model and its shutdown/telemetry interface.
-3. Test the HAT without motor movement first.
-4. Recheck `vcgencmd get_throttled` under speaker playback and motor load.
-5. Only then set `power.ups_enabled: true` and add model-specific telemetry.
+2. The HAT is the Waveshare UPS HAT (D): two 21700 cells in parallel, an INA219 at I2C `0x43`, and a power MCU at `0x2D`. Read the power-path warning in [docs/AI_INTERACTION.md](docs/AI_INTERACTION.md#ups-hat-d-power-notes) before connecting it alongside the Freenove battery.
+3. Confirm the monitor answers without enabling anything in R08Y: `i2cdetect -y 1` should list `40`, `43`, and `48` (`2d` may also appear).
+4. Test the HAT without motor movement first.
+5. Recheck `vcgencmd get_throttled` under speaker playback and motor load.
+6. Set `power.ups_enabled: true` and `power.ups_model: waveshare_ups_hat_d`, then run `--smoke-test`. The `ups` line reports percent, voltage, current, and whether it is charging. Compare the voltage with a multimeter once.
+
+R08Y then speaks a warning at `low_battery_percent` (20) and `critical_battery_percent` (8). Claude can report the battery through `read_sensors`. R08Y does not shut the Pi down or arm the HAT's auto-boot.
 
 ## Troubleshooting boundaries
 

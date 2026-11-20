@@ -14,7 +14,7 @@ This map records how the original R08Y design was adapted to Rob’s working Fre
 | Freenove pan/tilt | Working | Use the official `Servo.set_servo_pwm("0"/"1", angle)` adapter behind a single expression controller. | Guided expression sequence and face tracking without binding at configured limits. |
 | XVF3800 four-mic USB array | Capture verified at S16_LE, 16 kHz, two channels; LEDs and direction response working | Resolve by name, open the native format, downmix to 16 kHz mono for wake word/STT, and detect the known open-but-broken USB state with a startup read. | Matching ALSA/PipeWire devices, startup capture read, microphone RMS above zero, wake-word turn completes. |
 | Seeed 4-ohm 5-watt speaker | Working through the XVF3800 after setting its `PCM 1` level to 100 | Route WAV/TTS through `pw-play` to the PipeWire sink resolved by name. | Audible tone, startup greeting, and AI response. |
-| UPS HAT and battery | Not integrated | Defer. Keep disabled and report as skipped. No model-specific code until the exact HAT is identified and tested separately. | Future power and shutdown plan after direct-power acceptance. |
+| Waveshare UPS HAT (D), 2× 21700 | Identified; not yet tested on the robot | Read-only INA219 telemetry at I2C `0x43` behind `power.ups_enabled`. Never writes to the HAT's power MCU at `0x2D`. Confirm the 5 V power path before running it alongside the Freenove battery. | `i2cdetect` lists `43`; `--smoke-test` UPS line matches a multimeter reading. |
 
 ## Reused without architectural change
 
@@ -67,7 +67,7 @@ No code in this repository asserts that the physical wheel polarity, camera devi
 
 ALSA card numbers and PipeWire node IDs remain intentionally undisclosed in configuration. The working Pi reported ALSA card 3/device 0 during bring-up, but both identifiers can change after reboot or USB re-enumeration. R08Y resolves the configured name at each startup.
 
-The exact UPS model and interface remain unknown. R08Y does not pretend to monitor it.
+The UPS is the Waveshare UPS HAT (D). Its register settings follow Waveshare's published INA219 sample and still need one live reading checked against a multimeter.
 
 ## Safety model
 

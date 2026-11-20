@@ -79,6 +79,9 @@ interaction:
   acknowledgement_gesture: true
   response_gestures: true
   cue_gain: 0.14
+  follow_up_seconds: 6.0   # Keep listening after a reply without ROBY; 0 disables
+  speech_motion: true      # Head sway and nod follow the loudness of R08Y's voice
+  barge_in: false          # Say ROBY mid-reply to interrupt; test echo cancellation first
 
 audio:
   sample_rate: 16000       # Processing format used by wake word and STT
@@ -110,6 +113,7 @@ stt:
   huggingface_timeout_seconds: 30.0
   model: whisper-large-v3
   language: en
+  fallback_provider: groq  # Used only when Hugging Face fails; needs R08Y_GROQ_API_KEY
 
 ai:
   api_key: ""
@@ -135,6 +139,12 @@ ai:
     fits. Never narrate your gestures. Avoid filler, monologues, sarcasm, and
     robot catchphrases.
   conversations_db_path: data/conversations.db
+  effort: low              # Fastest spoken replies; medium thinks more before answering
+  max_tokens: 4096
+  tools_enabled: true      # Claude can gesture, look through the camera, and read sensors
+  allow_driving: false     # Let Claude drive the wheels; enable only on the floor
+  max_tool_rounds: 4
+  refusal_fallback: true   # Server-side retry on another model if a request is declined
 
 tts:
   provider: huggingface
@@ -147,7 +157,8 @@ tts:
     conversational pace with subtle synthetic precision. Avoid exaggerated
     brightness, announcer delivery, and cartoon robot effects.
   huggingface_timeout_seconds: 30.0
-  # Edge remains available as a manual fallback provider.
+  # Edge speaks automatically when Hugging Face cannot start or fails mid-reply.
+  fallback_provider: edge
   voice: en-US-AndrewMultilingualNeural
   rate: "+1%"
   pitch: "+2Hz"
@@ -188,8 +199,16 @@ mobility:
   wheel_scale: [1.0, 1.0, 1.0, 1.0]
 
 power:
-  ups_enabled: false        # Keep false until the UPS HAT is physically integrated
+  # Waveshare UPS HAT (D): set ups_enabled true and ups_model
+  # waveshare_ups_hat_d after `--smoke-test` reads it. R08Y only reads the
+  # INA219 battery monitor; it never switches power.
+  ups_enabled: false
   ups_model: null
+  i2c_bus: 1
+  i2c_address: 0x43
+  poll_seconds: 30
+  low_battery_percent: 20
+  critical_battery_percent: 8
 
 logging:
   level: INFO

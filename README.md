@@ -6,6 +6,8 @@ R08Y turns a Raspberry Pi 4B and Freenove 4WD mecanum chassis into a voice-contr
 
 In development. XVF3800 capture and speaker playback have been verified on the Pi. The ROBY wake-word path, interaction director, expression kernel, and mock-hardware suite are desktop-verified. Live acceptance still remains for ROBY detection, coordinated voice/body-language interaction, motor direction, and camera selection.
 
+The `claude/reachy-style-brain` branch adds Reachy Mini-style conversation. Claude uses tools to gesture, look through the camera, turn its head, read sensors, and run skills, and can drive when you opt in. After a reply, R08Y keeps listening for a follow-up without ROBY. Head motion follows the loudness of its voice. STT and TTS fall back automatically, and the Waveshare UPS HAT (D) battery is monitored. Everything is desktop-tested; see [docs/AI_INTERACTION.md](docs/AI_INTERACTION.md) for the Pi test sequence.
+
 ## Stack
 
 - Python 3.11+ with `asyncio` pipelines for vision, voice, and skills
@@ -55,26 +57,30 @@ Do not start the service until the passive smoke test passes. Follow [HOWTO.md](
 - Conversational states add restrained idle, listening, thinking, and speaking motion. `--expression-test` exercises only pan/tilt and never initializes wheel movement.
 - The interaction director adds a quiet acknowledgement cue after ROBY, chooses at most one meaning-aware gesture per response, and leaves neutral replies unembellished. `--interaction-test` auditions the speaker and pan/tilt together without initializing mobility.
 - Hugging Face realtime speech uses the Reachy Mini session service and its Qwen3-TTS voices. The provider token and allocated WebSocket URL are never logged. Edge remains a manual fallback.
+- Claude's tools are built from hardware that actually started. Driving is a separate opt-in (`ai.allow_driving`), keeps every mobility guard, and is off by default because the ultrasonic sensor cannot see table edges.
+- The Hugging Face realtime service is Pollen's undocumented Reachy Mini endpoint. `tts.fallback_provider: edge` and `stt.fallback_provider: groq` keep R08Y talking when it rejects a token or drops a session.
 - No-face patrol scanning is disabled by default. After losing a face, R08Y returns its gaze to center and retains only the restrained idle sway; full-range scanning requires `tracker.patrol_enabled: true`.
 - Forward movement requires a valid ultrasonic reading and at least 30 cm of clearance by default. Every timed command stops in `finally`, and a second watchdog stops stale commands.
-- `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change.
+- `power.ups_enabled` stays `false` until the UPS HAT and battery are tested as a separate change. With `ups_model: waveshare_ups_hat_d`, R08Y reads the HAT's INA219 at I2C `0x43` and speaks low-battery warnings. It never writes to the HAT's power MCU.
 - Negative `mobility.wheel_scale` values reverse individual wheels. Confirm direction only with all four wheels clear of the surface.
 - API keys belong in `/etc/r08y/r08y.env`, never in `config.yaml` or logs.
 
 ## Architecture
 
 ```text
-XVF3800 USB input -> ROBY model -> record -> HF realtime STT
-                                             |
-                                             v
-Freenove sensors -> skill commands ------> Claude -> HF realtime voice -> XVF3800 output
-       |                 |
-       |                 +-> guarded mecanum mobility
-       v
-camera -> face detection/recognition -> PID gaze target ----+
-skills -> named gestures ----------------------------------+-> expression queue -> pan/tilt
-interaction director -> turn cue + response gesture -------+
-voice -> listening/thinking/speaking state ----------------+
+XVF3800 USB input -> ROBY model (or follow-up window) -> record -> HF STT (Groq fallback)
+                                                                   |
+                                                                   v
+Freenove sensors -> skill commands ------------------------> Claude + RobotTools
+       |                 |                                    |          |
+       |                 +-> guarded mecanum mobility <-------+ (opt-in) |
+       |                                                                 v
+       |                                         HF voice (Edge fallback) -> XVF3800 output
+       v                                                                 |
+camera -> face detection/recognition -> PID gaze target ----+            | loudness envelope
+skills + Claude express/move_head -> named gestures --------+-> expression queue -> pan/tilt
+interaction director -> turn cue + response gesture -------+            ^
+voice -> listening/thinking/speaking state ----------------+------------+
 ```
 
 The hardware boundary is explicit:
@@ -85,6 +91,9 @@ r08y/modules/servo_controller.py Freenove pan/tilt or explicit GPIO adapter
 r08y/modules/expression_controller.py single motion owner, queue, smoothing, and body language
 r08y/modules/sensors.py          ultrasonic and light-sensor adapters
 r08y/modules/mobility.py         mecanum mixing, clearance guard, watchdog
+r08y/modules/robot_tools.py      Claude tool definitions and the actions behind them
+r08y/modules/speech_motion.py    loudness envelope for speech-synced head motion
+r08y/modules/power.py            Waveshare UPS HAT (D) battery telemetry and warnings
 r08y/modules/audio_devices.py    named ALSA capture, PortAudio fallback, and PipeWire routing
 r08y/modules/health.py           runtime component health report
 r08y/diagnostics.py              passive and opt-in Pi smoke tests
@@ -163,6 +172,9 @@ The example uses [`claude-sonnet-5-5`](https://platform.claude.com/docs/en/model
 
 # Coordinated acknowledgement, speech, and body language; no wheels
 ./venv/bin/python -m r08y --config config.yaml --interaction-test
+
+# Type to Claude; camera, pan/tilt, and sensors live; no wheels or audio
+./venv/bin/python -m r08y --config config.yaml --chat-test
 
 # Camera, pan/tilt home, sensors, microphone, and speaker tone
 ./venv/bin/python -m r08y --config config.yaml --smoke-test --exercise-hardware

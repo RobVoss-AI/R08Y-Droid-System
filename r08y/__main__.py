@@ -51,6 +51,11 @@ def main():
         help="Listen for the configured custom wake word without starting other hardware",
     )
     parser.add_argument(
+        "--chat-test",
+        action="store_true",
+        help="Type to Claude and watch it use camera, pan/tilt, and sensors; no wheels or audio",
+    )
+    parser.add_argument(
         "--speech-voice",
         help="Temporarily override the voice for --speech-test",
     )
@@ -121,13 +126,14 @@ def main():
             args.expression_test,
             args.interaction_test,
             args.wake_word_test,
+            args.chat_test,
             args.smoke_test,
         )
     )
     if selected_test_modes > 1:
         parser.error(
             "--audio-test, --speech-test, --wake-word-test, --expression-test, "
-            "--interaction-test, and --smoke-test are separate test modes"
+            "--interaction-test, --chat-test, and --smoke-test are separate test modes"
         )
     if (
         args.audio_test
@@ -135,6 +141,7 @@ def main():
         or args.expression_test
         or args.interaction_test
         or args.wake_word_test
+        or args.chat_test
     ) and (
         args.exercise_hardware or args.exercise_mobility
     ):
@@ -213,6 +220,21 @@ def main():
             print("\nR08Y interaction audition stopped. Returning pan/tilt home.", flush=True)
             os._exit(130)
         print_smoke_results(results, heading="R08Y guided interaction audition")
+        sys.exit(1 if any(result.status == "fail" for result in results) else 0)
+
+    if args.chat_test:
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            sys.exit(1)
+        from r08y.diagnostics import print_smoke_results, run_chat_test
+
+        try:
+            results = asyncio.run(run_chat_test(config))
+        except KeyboardInterrupt:
+            print("\nR08Y chat test stopped. Returning pan/tilt home.", flush=True)
+            os._exit(130)
+        print_smoke_results(results, heading="R08Y Claude chat test")
         sys.exit(1 if any(result.status == "fail" for result in results) else 0)
 
     if args.exercise_mobility and not args.confirm_wheels_raised:

@@ -10,6 +10,7 @@ import math
 import struct
 import wave
 from array import array
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum, auto
 from pathlib import Path
@@ -473,12 +474,47 @@ class VoiceInput:
             return None
         return sum(levels) / len(levels) if levels else None
 
-    async def record_speech(self) -> Optional[bytes]:
+    async def _wait_for_speech_onset(self, timeout: float) -> Optional[list]:
+        """Return the opening chunks of speech, or None if nobody speaks in time."""
+        loop = asyncio.get_running_loop()
+        chunks_per_second = self._audio_config.sample_rate / self._audio_config.chunk_size
+        # Keep about 0.3 s before the onset so the first syllable is not clipped.
+        preroll: deque = deque(maxlen=max(1, int(0.3 * chunks_per_second)))
+        loud_run = 0
+        for _ in range(max(1, int(timeout * chunks_per_second))):
+            if not self._running:
+                return None
+            chunk = await loop.run_in_executor(self._executor, self._read_chunk)
+            if chunk is None:
+                continue
+            preroll.append(chunk)
+            if self._compute_rms(chunk) >= self._audio_config.rms_threshold:
+                loud_run += 1
+                # Two loud chunks in a row ignore single clicks and taps.
+                if loud_run >= 2:
+                    return list(preroll)
+            else:
+                loud_run = 0
+        return None
+
+    async def record_speech(self, start_timeout: Optional[float] = None) -> Optional[bytes]:
+        """Record one utterance, ending after the configured silence.
+
+        With ``start_timeout``, first wait up to that many seconds for speech to
+        begin and return None if nobody speaks. Follow-up turns use this so a
+        quiet room does not become an empty transcription.
+        """
         if not self.available:
             return None
         self._state = VoiceState.LISTENING
         loop = asyncio.get_running_loop()
         frames = []
+        if start_timeout is not None:
+            opening = await self._wait_for_speech_onset(start_timeout)
+            if opening is None:
+                self._state = VoiceState.IDLE
+                return None
+            frames.extend(opening)
         silent_chunks = 0
         max_chunks = int(
             self._audio_config.max_record_seconds

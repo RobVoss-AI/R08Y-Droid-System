@@ -82,6 +82,22 @@ class FaceTracker:
         self._patrol_active = False
         self._idle_home_set = False
         self._prev_update_time: Optional[float] = None
+        self._enabled = True
+        self._hold_until = 0.0
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Turn face following on or off; the gaze stays where it is."""
+        self._enabled = enabled
+        self._pan_pid.reset()
+        self._tilt_pid.reset()
+
+    def hold(self, seconds: float) -> None:
+        """Keep a deliberate look (such as "look left") for a few seconds."""
+        self._hold_until = max(self._hold_until, time.monotonic() + seconds)
 
     async def update(self, detection: Optional[FaceDetection]) -> None:
         """Update servo positions based on face detection (or lack thereof).
@@ -89,6 +105,9 @@ class FaceTracker:
         Call this every frame from the vision pipeline.
         """
         now = time.monotonic()
+        if not self._enabled or now < self._hold_until:
+            self._prev_update_time = now
+            return
 
         if detection is not None:
             self._last_face_time = now

@@ -210,3 +210,30 @@ def test_preserved_null_wake_model_does_not_block_service_start(tmp_path):
     errors = validate_config(load_config(str(config_file)))
 
     assert not any("keyword_path" in error for error in errors)
+
+
+def test_ai_interaction_and_fallback_settings_are_validated(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "ai:\n  effort: turbo\n  max_tool_rounds: 0\n"
+        "interaction:\n  follow_up_seconds: 90\n"
+        "stt:\n  provider: groq\n  fallback_provider: groq\n"
+        "tts:\n  fallback_provider: openai\n"
+    )
+    errors = validate_config(load_config(str(config_file)))
+    assert "ai effort must be low, medium, high, xhigh, or max" in errors
+    assert "ai max_tool_rounds must be between 1 and 8" in errors
+    assert "interaction follow_up_seconds must be between 0 and 30" in errors
+    assert "stt fallback_provider must differ from provider" in errors
+    assert "tts fallback_provider must be edge or null" in errors
+
+
+def test_new_ai_settings_default_to_safe_values_for_existing_configs(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("ai:\n  model: claude-sonnet-5-5\n")
+    config = load_config(str(config_file))
+    assert config.ai.tools_enabled
+    assert not config.ai.allow_driving
+    assert config.ai.effort == "low"
+    assert config.interaction.follow_up_seconds == 6.0
+    assert not config.interaction.barge_in

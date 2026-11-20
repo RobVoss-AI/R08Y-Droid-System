@@ -6,7 +6,7 @@ import math
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Awaitable, Callable, Dict, Optional, Tuple
+from typing import Awaitable, Callable, Dict, Optional, Sequence, Tuple
 
 from r08y.config import ExpressionConfig, ServoConfig
 from r08y.modules.servo_controller import MotorController
@@ -104,7 +104,44 @@ GESTURES: Dict[str, GestureDefinition] = {
         (_step(-22, 0, 0.35), _step(22, 0, 0.45), _step(0, 0, 0.3)),
         anchor_home=True,
     ),
+    # Emotion intents the AI brain can choose, after Reachy Mini's emotion
+    # library. Negative tilt lifts the camera; positive tilt lowers it.
+    "happy": GestureDefinition(
+        (
+            _step(-6, -8, 0.16),
+            _step(6, -6, 0.16),
+            _step(-4, -8, 0.16),
+            _step(0, -4, 0.16),
+        )
+    ),
+    "excited": GestureDefinition(
+        (
+            _step(0, -12, 0.12),
+            _step(0, -2, 0.12),
+            _step(0, -12, 0.12),
+            _step(0, -2, 0.12),
+        )
+    ),
+    "sad": GestureDefinition(
+        (_step(0, 14, 0.6), _step(-4, 16, 0.5), _step(4, 16, 0.5))
+    ),
+    "surprised": GestureDefinition((_step(0, -16, 0.1), _step(0, -14, 0.45))),
+    "thinking": GestureDefinition((_step(-10, -10, 0.4), _step(-12, -12, 0.6))),
+    "confused": GestureDefinition(
+        (_step(10, 4, 0.3), _step(-6, 6, 0.3), _step(8, 3, 0.3))
+    ),
+    "sleepy": GestureDefinition(
+        (_step(0, 12, 0.8), _step(0, 18, 0.9), _step(0, 10, 0.5))
+    ),
+    "shy": GestureDefinition((_step(-12, 12, 0.4), _step(-14, 14, 0.6))),
+    "proud": GestureDefinition((_step(0, -12, 0.3), _step(0, -12, 0.5))),
+    "attentive": GestureDefinition((_step(0, 6, 0.25), _step(0, 5, 0.4))),
 }
+
+# Speech motion follows Reachy Mini's head wobble: slow side-to-side sway and a
+# faster nod, both scaled by the loudness of the voice being played.
+SPEECH_SWAY_HZ = 0.6
+SPEECH_NOD_HZ = 2.2
 
 
 class ExpressionController:
@@ -136,6 +173,9 @@ class ExpressionController:
         self._gaze_tilt = float(servo_config.home_tilt)
         self._pose_pan = self._gaze_pan
         self._pose_tilt = self._gaze_tilt
+        self._speech_levels: Tuple[float, ...] = ()
+        self._speech_frame_seconds = 0.05
+        self._speech_started = 0.0
 
     @property
     def available(self) -> bool:
@@ -148,6 +188,11 @@ class ExpressionController:
     @property
     def interaction_state(self) -> InteractionState:
         return self._state
+
+    @property
+    def has_pending_motion(self) -> bool:
+        """True while a gesture is running or waiting in the queue."""
+        return self._active_cancel is not None or not self._queue.empty()
 
     async def start(self) -> None:
         if self._running:
@@ -188,6 +233,27 @@ class ExpressionController:
 
     async def set_interaction_state(self, state: InteractionState | str) -> None:
         self._state = InteractionState(state)
+        if self._state != InteractionState.SPEAKING:
+            self._speech_levels = ()
+
+    async def set_speech_envelope(
+        self, levels: Sequence[float], frame_seconds: float
+    ) -> None:
+        """Follow the loudness of audio that starts playing now.
+
+        ``levels`` holds one 0-1 loudness value per ``frame_seconds`` of audio.
+        """
+        self._speech_levels = tuple(max(0.0, min(1.0, level)) for level in levels)
+        self._speech_frame_seconds = max(0.01, frame_seconds)
+        self._speech_started = self._clock()
+
+    def _speech_level(self, now: float) -> Optional[float]:
+        if not self._speech_levels:
+            return None
+        index = int((now - self._speech_started) / self._speech_frame_seconds)
+        if 0 <= index < len(self._speech_levels):
+            return self._speech_levels[index]
+        return None
 
     async def set_gaze_target(self, pan: float, tilt: float) -> None:
         """Update the tracked gaze target without writing to hardware directly."""
@@ -374,9 +440,21 @@ class ExpressionController:
             pan = self._gaze_pan + math.sin(phase) * self._config.thinking_sway_degrees
             tilt = self._gaze_tilt + 1.0
         else:
-            phase = now * (2 * math.pi / 1.2)
-            pan = self._gaze_pan + math.sin(phase * 0.5) * 0.6
-            tilt = self._gaze_tilt + math.sin(phase) * self._config.speaking_bob_degrees
+            level = self._speech_level(now)
+            if level is None:
+                phase = now * (2 * math.pi / 1.2)
+                pan = self._gaze_pan + math.sin(phase * 0.5) * 0.6
+                tilt = self._gaze_tilt + math.sin(phase) * self._config.speaking_bob_degrees
+            else:
+                amplitude = self._config.speaking_bob_degrees * 2.0 * level
+                pan = self._gaze_pan + math.sin(
+                    now * 2 * math.pi * SPEECH_SWAY_HZ
+                ) * amplitude * 1.25
+                tilt = (
+                    self._gaze_tilt
+                    + math.sin(now * 2 * math.pi * SPEECH_NOD_HZ) * amplitude
+                    - amplitude * 0.5
+                )
         return self._clamp(pan, tilt)
 
     async def _move_to(

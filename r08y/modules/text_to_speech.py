@@ -8,11 +8,12 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, List, Optional
 
 from r08y.config import TTSConfig
 from r08y.modules.audio_devices import PipeWireResolver
 from r08y.modules.huggingface_speech import HuggingFaceSpeech, safe_exception_detail
+from r08y.modules.speech_motion import speech_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ except ImportError:
 
 
 ALLOWED_PLAYERS = {"mpv", "ffplay", "paplay", "pw-play", "aplay"}
+
+EnvelopeListener = Callable[[List[float], float], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,20 @@ class TextToSpeech:
         self.playback_available = False
         self.available = False
         self._huggingface: Optional[HuggingFaceSpeech] = None
+        self._provider = config.provider
+        self._envelope_listener: Optional[EnvelopeListener] = None
+
+    @property
+    def provider(self) -> str:
+        """The provider currently speaking, after any startup fallback."""
+        return self._provider
+
+    def set_envelope_listener(self, listener: Optional[EnvelopeListener]) -> None:
+        """Receive each conversational reply's loudness envelope at playback start."""
+        self._envelope_listener = listener
+
+    def _edge_fallback_ready(self) -> bool:
+        return self._config.fallback_provider == "edge" and EDGE_TTS_AVAILABLE
 
     def _select_player(self) -> Optional[str]:
         requested = self._config.playback_command
@@ -156,7 +173,12 @@ class TextToSpeech:
                 self.output_detail = f"{self.output_detail}; {self._last_error}"
                 logger.error("Hugging Face speech unavailable: %s", self._last_error)
                 self._huggingface = None
-                return
+                if not self._edge_fallback_ready():
+                    return
+                logger.warning("Speaking with the Edge fallback voice instead")
+                self.output_detail = f"{self.output_detail}; Edge fallback active"
+                self._provider = "edge"
+                self._last_error = None
             self.available = True
         else:
             self.available = EDGE_TTS_AVAILABLE
@@ -164,12 +186,12 @@ class TextToSpeech:
             self._task = asyncio.create_task(self._playback_worker())
             voice = (
                 self._config.huggingface_voice
-                if self._config.provider == "huggingface"
+                if self._provider == "huggingface"
                 else self._config.voice
             )
             logger.info(
                 "TTS ready (provider=%s, voice=%s, player=%s)",
-                self._config.provider,
+                self._provider,
                 voice,
                 player,
             )
@@ -207,7 +229,7 @@ class TextToSpeech:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self._last_error = _synthesis_error_detail(exc, self._config.provider)
+                self._last_error = _synthesis_error_detail(exc, self._provider)
                 if getattr(exc, "status", None) is not None:
                     logger.error("TTS playback error: %s", self._last_error)
                 else:
@@ -264,10 +286,20 @@ class TextToSpeech:
         self._speaking = True
         paths = []
         try:
-            if self._config.provider == "huggingface":
-                if self._huggingface is None:
-                    raise RuntimeError("Hugging Face realtime speech is not connected")
-                wav_data = await self._huggingface.synthesize(text)
+            wav_data = None
+            if self._provider == "huggingface":
+                try:
+                    if self._huggingface is None:
+                        raise RuntimeError("Hugging Face realtime speech is not connected")
+                    wav_data = await self._huggingface.synthesize(text)
+                except Exception as exc:
+                    if not self._edge_fallback_ready():
+                        raise
+                    logger.warning(
+                        "Hugging Face speech failed (%s); using Edge for this reply",
+                        _synthesis_error_detail(exc, "huggingface"),
+                    )
+            if wav_data is not None:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
                     temp_wav.write(wav_data)
                     wav_path = temp_wav.name
@@ -275,6 +307,7 @@ class TextToSpeech:
                 if self._interrupted:
                     return
                 if on_playback_start is not None:
+                    await self._announce_envelope(wav_data)
                     try:
                         await on_playback_start()
                     except Exception:
@@ -307,6 +340,8 @@ class TextToSpeech:
                 playback_path = wav_path
                 is_wav = True
             if on_playback_start is not None:
+                if is_wav:
+                    await self._announce_envelope(Path(playback_path).read_bytes())
                 try:
                     await on_playback_start()
                 except Exception:
@@ -320,6 +355,16 @@ class TextToSpeech:
                     Path(path).unlink()
                 except OSError:
                     pass
+
+    async def _announce_envelope(self, wav_data: bytes) -> None:
+        if self._envelope_listener is None:
+            return
+        try:
+            levels, frame_seconds = speech_envelope(wav_data)
+            if levels:
+                await self._envelope_listener(levels, frame_seconds)
+        except Exception:
+            logger.exception("Speech envelope listener failed")
 
     async def play_wav_bytes(self, wav_data: bytes) -> bool:
         """Play a generated cue through the same configured output path."""

@@ -153,15 +153,28 @@ def _passive_checks(config: R08YConfig) -> List[SmokeResult]:
         results.append(_result("power", value == "throttled=0x0", value or "no response"))
     else:
         results.append(SmokeResult("power", "skip", "vcgencmd is unavailable"))
-
-    results.append(
-        SmokeResult(
-            "ups",
-            "skip" if not config.power.ups_enabled else "warn",
-            "not integrated" if not config.power.ups_enabled else "configured; live telemetry not implemented",
-        )
-    )
     return results
+
+
+async def _ups_check(config: R08YConfig) -> SmokeResult:
+    """Read the UPS HAT battery monitor; it never switches power."""
+    if not config.power.ups_enabled:
+        return SmokeResult("ups", "skip", "not integrated (power.ups_enabled is false)")
+    from r08y.modules.power import create_battery_monitor
+
+    monitor = create_battery_monitor(config.power)
+    try:
+        await monitor.start()
+        reading = await monitor.read() if monitor.available else None
+    finally:
+        await monitor.stop()
+    if reading is None:
+        return SmokeResult("ups", "fail", monitor.detail)
+    return _result(
+        "ups",
+        reading.charging or reading.percent > config.power.critical_battery_percent,
+        f"UPS HAT (D): {reading.describe()}, {reading.current_ma:.0f} mA",
+    )
 
 
 async def run_audio_test(
@@ -694,9 +707,113 @@ async def run_smoke_test(
     exercise_mobility: bool = False,
 ) -> List[SmokeResult]:
     results = await asyncio.to_thread(_passive_checks, config)
+    results.append(await _ups_check(config))
     if exercise:
         results.extend(await _exercise_hardware(config, exercise_mobility))
     return results
+
+
+async def run_chat_test(
+    config: R08YConfig,
+    *,
+    input_fn: Callable[[str], str] = input,
+    emit: Callable[[str], None] = print,
+) -> List[SmokeResult]:
+    """Type to R08Y's Claude brain and watch it use its tools.
+
+    Starts the camera, pan/tilt, and passive sensors so Claude can look,
+    gesture, and read sensors. Wheels and audio are never initialized.
+    """
+    from r08y.modules.ai_brain import AIBrain, VisualContext
+    from r08y.modules.camera import CameraCapture
+    from r08y.modules.expression_controller import ExpressionController
+    from r08y.modules.power import create_battery_monitor
+    from r08y.modules.robot_tools import RobotTools
+    from r08y.modules.sensors import create_distance_sensor, create_light_sensors
+    from r08y.modules.servo_controller import create_servo_controller
+
+    brain = AIBrain(config.ai)
+    camera = CameraCapture(config.camera)
+    servo = create_servo_controller(config.servos)
+    expression = ExpressionController(servo, config.servos, config.expression)
+    distance = create_distance_sensor(config.distance)
+    light_sensors = create_light_sensors(config.light_sensors)
+    battery = create_battery_monitor(config.power)
+    turns = 0
+    try:
+        await brain.start()
+        if not brain.available:
+            return [
+                SmokeResult(
+                    "ai_brain",
+                    "fail",
+                    "Claude is not configured; set R08Y_ANTHROPIC_API_KEY",
+                )
+            ]
+        # The upstream ADC reads params.json first, as in the main runtime.
+        await light_sensors.start()
+        await asyncio.gather(
+            camera.start(),
+            servo.start(),
+            distance.start(),
+            battery.start(),
+            return_exceptions=True,
+        )
+        await expression.start()
+        tools = RobotTools(
+            config.ai,
+            config.mobility,
+            expression=expression,
+            camera=camera,
+            distance=distance,
+            light_sensors=light_sensors,
+            battery=battery,
+        )
+        emit(f"Claude model: {config.ai.model} (effort {config.ai.effort})")
+        emit(f"Claude tools: {', '.join(tools.names)}")
+        emit("Type a message for R08Y. Type 'quit' to stop.")
+
+        async def show_interim(words: str) -> None:
+            emit(f"R08Y (while acting)> {words}")
+
+        while True:
+            try:
+                text = (await asyncio.to_thread(input_fn, "you> ")).strip()
+            except EOFError:
+                break
+            if text.casefold() in {"quit", "exit"}:
+                break
+            if not text:
+                continue
+            reply = await brain.think(
+                text,
+                VisualContext(),
+                "chat-test",
+                tools=tools,
+                on_interim_text=show_interim,
+            )
+            emit(f"R08Y> {reply or '(answered with a gesture)'}")
+            turns += 1
+            if tools.conversation_ended:
+                emit("(R08Y ended the conversation)")
+    finally:
+        await expression.stop()
+        await asyncio.gather(
+            brain.stop(),
+            camera.stop(),
+            servo.stop(),
+            distance.stop(),
+            light_sensors.stop(),
+            battery.stop(),
+            return_exceptions=True,
+        )
+    return [
+        SmokeResult(
+            "chat",
+            "pass" if turns else "skip",
+            f"{turns} conversation turn(s); wheels and audio stayed off",
+        )
+    ]
 
 
 def print_smoke_results(

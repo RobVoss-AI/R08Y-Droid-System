@@ -94,6 +94,14 @@ class InteractionConfig:
     acknowledgement_gesture: bool = True
     response_gestures: bool = True
     cue_gain: float = 0.14
+    # Seconds to keep listening for a reply after R08Y speaks, without ROBY.
+    # Zero returns to wake-word-only turns.
+    follow_up_seconds: float = 6.0
+    # Drive the speaking head motion from the loudness of R08Y's own voice.
+    speech_motion: bool = True
+    # Say ROBY while R08Y is talking to cut it off. Requires echo
+    # cancellation that keeps R08Y's own voice out of the microphone.
+    barge_in: bool = False
 
 
 @dataclass
@@ -134,6 +142,8 @@ class STTConfig:
     huggingface_timeout_seconds: float = 30.0
     model: str = "whisper-large-v3"
     language: str = "en"
+    # Used only when the primary provider fails: groq, openai, or null.
+    fallback_provider: Optional[str] = None
 
 
 @dataclass
@@ -162,6 +172,17 @@ class AIConfig:
         "your gestures. Avoid filler, monologues, sarcasm, and robot catchphrases."
     )
     conversations_db_path: str = "data/conversations.db"
+    # low keeps spoken replies fast; raise it only for harder conversations.
+    effort: str = "low"
+    max_tokens: int = 4096
+    # Let Claude choose gestures, look through the camera, and read sensors.
+    tools_enabled: bool = True
+    # Let Claude drive the wheels. Keep false while R08Y sits on a desk: the
+    # ultrasonic guard sees obstacles, not table edges.
+    allow_driving: bool = False
+    max_tool_rounds: int = 4
+    # Retry declined requests on another model (Claude API server-side fallback).
+    refusal_fallback: bool = True
 
 
 @dataclass
@@ -183,6 +204,8 @@ class TTSConfig:
         "delivery, and cartoon robot effects."
     )
     huggingface_timeout_seconds: float = 30.0
+    # Used when the primary provider cannot start or fails mid-reply: edge or null.
+    fallback_provider: Optional[str] = None
     playback_command: str = "pw-play"
     output_device_name: str = "XVF3800"
     output_target: Optional[str] = None
@@ -240,7 +263,12 @@ class MobilityConfig:
 @dataclass
 class PowerConfig:
     ups_enabled: bool = False
-    ups_model: Optional[str] = None
+    ups_model: Optional[str] = None  # waveshare_ups_hat_d
+    i2c_bus: int = 1
+    i2c_address: int = 0x43          # UPS HAT (D) INA219 battery monitor
+    poll_seconds: float = 30.0
+    low_battery_percent: float = 20.0
+    critical_battery_percent: float = 8.0
 
 
 @dataclass
@@ -360,6 +388,10 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("wake_word engine must be porcupine or rms")
     if config.stt.provider not in {"huggingface", "groq", "openai"}:
         errors.append("stt provider must be huggingface, groq, or openai")
+    if config.stt.fallback_provider not in {None, "groq", "openai"}:
+        errors.append("stt fallback_provider must be groq, openai, or null")
+    elif config.stt.fallback_provider == config.stt.provider:
+        errors.append("stt fallback_provider must differ from provider")
     if config.stt.huggingface_timeout_seconds <= 0:
         errors.append("stt huggingface_timeout_seconds must be positive")
     if not config.stt.huggingface_session_url.startswith("https://"):
@@ -378,6 +410,16 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("wake_word keyword_path must point to a custom .ppn model")
     if config.tts.provider not in {"huggingface", "edge"}:
         errors.append("tts provider must be huggingface or edge")
+    if config.tts.fallback_provider not in {None, "edge"}:
+        errors.append("tts fallback_provider must be edge or null")
+    elif config.tts.fallback_provider == config.tts.provider:
+        errors.append("tts fallback_provider must differ from provider")
+    if config.ai.effort not in {"low", "medium", "high", "xhigh", "max"}:
+        errors.append("ai effort must be low, medium, high, xhigh, or max")
+    if not 256 <= config.ai.max_tokens <= 64000:
+        errors.append("ai max_tokens must be between 256 and 64000")
+    if not 1 <= config.ai.max_tool_rounds <= 8:
+        errors.append("ai max_tool_rounds must be between 1 and 8")
     if not re.fullmatch(r"[+-]\d+%", config.tts.rate):
         errors.append("tts rate must use a signed percentage such as +0% or -10%")
     if not re.fullmatch(r"[+-]\d+Hz", config.tts.pitch):
@@ -416,6 +458,20 @@ def validate_config(config: R08YConfig) -> List[str]:
         errors.append("expression queue_size must be between 1 and 32")
     if not 0 <= config.interaction.cue_gain <= 0.5:
         errors.append("interaction cue_gain must be between 0 and 0.5")
+    if not 0 <= config.interaction.follow_up_seconds <= 30:
+        errors.append("interaction follow_up_seconds must be between 0 and 30")
+    if config.power.ups_enabled and config.power.ups_model != "waveshare_ups_hat_d":
+        errors.append("power ups_model must be waveshare_ups_hat_d when ups_enabled is true")
+    if config.power.poll_seconds < 2:
+        errors.append("power poll_seconds must be at least 2")
+    if not (
+        0 <= config.power.critical_battery_percent
+        < config.power.low_battery_percent
+        <= 100
+    ):
+        errors.append(
+            "power battery thresholds must satisfy 0 <= critical < low <= 100"
+        )
     if config.distance.driver == "gpio" and (
         config.distance.trigger_pin is None or config.distance.echo_pin is None
     ):

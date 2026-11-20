@@ -191,3 +191,70 @@ def test_http_403_error_hides_signed_url_and_reports_clock_check():
     assert "HTTP 403" in detail
     assert "UTC clock" in detail
     assert "secret-token" not in detail
+
+
+def test_huggingface_failure_at_startup_switches_to_edge(monkeypatch):
+    class RejectingHuggingFace:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def start(self):
+            raise RuntimeError("Hugging Face rejected the token.")
+
+    async def run():
+        monkeypatch.setattr(text_to_speech, "PipeWireResolver", MatchingSinkResolver)
+        monkeypatch.setattr(text_to_speech, "HuggingFaceSpeech", RejectingHuggingFace)
+        monkeypatch.setattr(text_to_speech, "EDGE_TTS_AVAILABLE", True)
+        tts = TextToSpeech(TTSConfig(provider="huggingface", fallback_provider="edge"))
+        monkeypatch.setattr(tts, "_select_player", lambda: "mpv")
+        await tts.start()
+        assert tts.available
+        assert tts.provider == "edge"
+        assert "Edge fallback" in tts.output_detail
+        await tts.stop()
+
+        strict = TextToSpeech(TTSConfig(provider="huggingface"))
+        monkeypatch.setattr(strict, "_select_player", lambda: "mpv")
+        await strict.start()
+        assert not strict.available
+        await strict.stop()
+
+    asyncio.run(run())
+
+
+def test_reply_envelope_reaches_listener_before_playback(monkeypatch):
+    import io
+    import wave
+
+    events = []
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\x00\x40" * 16000)
+
+    class FakeHuggingFace:
+        async def synthesize(self, _text):
+            return buffer.getvalue()
+
+    async def run():
+        tts = TextToSpeech(TTSConfig(provider="huggingface"))
+        tts._huggingface = FakeHuggingFace()
+
+        async def listener(levels, frame_seconds):
+            events.append(("envelope", len(levels), frame_seconds))
+
+        async def started():
+            events.append("speaking")
+
+        async def fake_play(_path, is_wav=False):
+            events.append("audio")
+
+        tts.set_envelope_listener(listener)
+        monkeypatch.setattr(tts, "_play_path", fake_play)
+        await tts._synthesize_and_play("Hello.", on_playback_start=started)
+
+    asyncio.run(run())
+
+    assert events == [("envelope", 20, 0.05), "speaking", "audio"]

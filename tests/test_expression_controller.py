@@ -273,3 +273,33 @@ def test_camera_gesture_skill_submits_named_gesture():
         assert expression.gestures == ["nod"]
 
     asyncio.run(run())
+
+
+def test_face_tracker_hold_and_disable_leave_the_gaze_alone():
+    class GazeRecorder:
+        def __init__(self):
+            self.targets = []
+
+        async def get_gaze_target(self):
+            return 90.0, 90.0
+
+        async def set_gaze_target(self, pan, tilt):
+            self.targets.append((pan, tilt))
+
+    async def run():
+        expression = GazeRecorder()
+        tracker = FaceTracker(expression, ServoConfig(driver="mock"), TrackerConfig())
+        face = FaceDetection(x=0, y=0, w=80, h=80)
+
+        tracker.hold(5.0)
+        await tracker.update(face)
+        tracker._hold_until = 0.0
+        tracker.set_enabled(False)
+        await tracker.update(face)
+        assert expression.targets == []
+
+        tracker.set_enabled(True)
+        await tracker.update(face)
+        assert expression.targets
+
+    asyncio.run(run())

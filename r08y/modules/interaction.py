@@ -64,6 +64,17 @@ class InteractionDirector:
     def __init__(self, config: InteractionConfig):
         self._config = config
 
+    @property
+    def follow_up_seconds(self) -> float:
+        """How long to listen for a reply without the wake word."""
+        if not self._config.enabled:
+            return 0.0
+        return self._config.follow_up_seconds
+
+    @property
+    def barge_in(self) -> bool:
+        return self._config.enabled and self._config.barge_in
+
     def response_gesture(self, text: str) -> Optional[str]:
         """Choose one conservative gesture from the spoken response."""
         if not self._config.enabled or not self._config.response_gestures:
@@ -141,6 +152,9 @@ class InteractionDirector:
         """Queue at most one gesture for a spoken response."""
         gesture = self.response_gesture(text)
         if gesture is None:
+            return None
+        # A gesture Claude chose is still playing; don't stack a second one on it.
+        if getattr(expression, "has_pending_motion", False):
             return None
         accepted = await expression.perform_gesture(
             gesture,

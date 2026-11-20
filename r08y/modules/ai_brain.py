@@ -1,22 +1,42 @@
 """AI brain module for R08Y.
 
 Sends transcribed user speech (with visual context) to Claude API and
-returns conversational responses. Maintains per-user conversation history
-in SQLite.
+returns conversational responses. Claude can act through RobotTools (gestures,
+camera, head direction, sensors, guarded driving) before it answers, the way
+Reachy Mini's conversation app lets its model move the robot. Maintains
+per-user conversation history in SQLite.
 """
 
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 
 import aiosqlite
 
 from r08y.config import AIConfig
 
 logger = logging.getLogger(__name__)
+
+# Models that accept the server-side refusal fallback ("default" routing).
+FALLBACK_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1"}
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+REFUSAL_REPLY = "That's one I can't help with."
+
+TOOL_GUIDANCE = (
+    "[Body and actions: You have a pan/tilt camera head on a small wheeled body, "
+    "and tools that move it. Act with them instead of only talking: use express "
+    "when a reaction would feel natural, look_with_camera whenever someone asks "
+    "what you see or seeing would help, and move_head or set_face_tracking when "
+    "asked where to look. When an action takes a moment, put a few spoken words "
+    "first in the same reply, such as \"Let me look.\" After acting, answer in a "
+    "short spoken sentence, or say nothing if the gesture says enough. Call "
+    "end_conversation when the person says goodbye or is finished.]"
+)
 
 # Anthropic SDK is required for this module
 try:
@@ -99,30 +119,23 @@ class AIBrain:
                 return command
         return None
 
-    def _build_system_prompt(self, context_note: str) -> str:
-        """Combine role, spoken-delivery guidance, and current visual context."""
-        return (
+    def _stable_system_prompt(self, with_tools: bool = False) -> str:
+        """Role and spoken-delivery guidance that stays fixed between turns."""
+        prompt = (
             f"{self._config.system_prompt}\n\n"
             f"[Personality: {self._config.personality_profile}]\n"
-            f"[Spoken response style: {self._config.spoken_style}]\n"
-            f"[Visual context: {context_note}]"
+            f"[Spoken response style: {self._config.spoken_style}]"
         )
+        if with_tools:
+            prompt += f"\n{TOOL_GUIDANCE}"
+        return prompt
 
-    async def think(self, user_text: str, visual_context: VisualContext, user_name: str = "unknown") -> str:
-        """Process user speech and generate a response.
+    def _build_system_prompt(self, context_note: str) -> str:
+        """Combine role, spoken-delivery guidance, and current visual context."""
+        return f"{self._stable_system_prompt()}\n[Visual context: {context_note}]"
 
-        Args:
-            user_text: Transcribed speech from the user.
-            visual_context: What R08Y currently sees.
-            user_name: Recognized face name, or "unknown".
-
-        Returns:
-            Response text for TTS.
-        """
-        if not self.available:
-            return "I'm having trouble thinking right now. My brain module isn't connected."
-
-        # Build visual context prefix
+    @staticmethod
+    def _context_note(visual_context: VisualContext, now: Optional[datetime] = None) -> str:
         context_parts = []
         if visual_context.faces_visible > 0:
             if visual_context.is_known and visual_context.recognized_name:
@@ -131,8 +144,54 @@ class AIBrain:
                 context_parts.append(f"You see {visual_context.faces_visible} face(s) but don't recognize them.")
         else:
             context_parts.append("You don't see anyone right now.")
+        now = now or datetime.now().astimezone()
+        context_parts.append(f"Local time: {now.strftime('%A %B %d, %Y, %I:%M %p')}.")
+        return " ".join(context_parts)
 
-        context_note = " ".join(context_parts)
+    async def _create_message(self, system: list, messages: list, tools: list):
+        request = dict(
+            model=self._config.model,
+            max_tokens=self._config.max_tokens,
+            system=system,
+            messages=messages,
+            output_config={"effort": self._config.effort},
+        )
+        if tools:
+            request["tools"] = tools
+        if self._config.refusal_fallback and self._config.model in FALLBACK_MODELS:
+            return await self._client.beta.messages.create(
+                betas=[FALLBACK_BETA],
+                fallbacks="default",
+                **request,
+            )
+        return await self._client.messages.create(**request)
+
+    async def think(
+        self,
+        user_text: str,
+        visual_context: VisualContext,
+        user_name: str = "unknown",
+        *,
+        tools=None,
+        on_interim_text: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> str:
+        """Process user speech and generate a response.
+
+        Args:
+            user_text: Transcribed speech from the user.
+            visual_context: What R08Y currently sees.
+            user_name: Recognized face name, or "unknown".
+            tools: Optional RobotTools; Claude may call them before replying.
+            on_interim_text: Receives words Claude says before an action
+                ("Let me look.") so they can play while the action runs.
+
+        Returns:
+            Response text for TTS. Empty when Claude answered with a gesture only.
+        """
+        if not self.available:
+            return "I'm having trouble thinking right now. My brain module isn't connected."
+
+        context_note = self._context_note(visual_context)
 
         # Get or create conversation history for this user
         if user_name not in self._histories:
@@ -143,31 +202,91 @@ class AIBrain:
         # Add user turn
         history.append(ConversationTurn(role="user", content=user_text))
 
-        # Trim history to max turns
+        # Trim history to max turns. The API requires the first message to come
+        # from the user, so drop any assistant turn left at the front.
         max_turns = self._config.max_history_turns
         if len(history) > max_turns:
             history = history[-max_turns:]
-            self._histories[user_name] = history
+        while history and history[0].role != "user":
+            history = history[1:]
+        self._histories[user_name] = history
 
-        # Build messages for Claude
-        system_prompt = self._build_system_prompt(context_note)
+        tool_definitions = []
+        if tools is not None and self._config.tools_enabled:
+            tools.begin_turn()
+            tool_definitions = tools.definitions()
+
+        # The fixed prompt is cached; the per-turn context follows it. Earlier
+        # turns are sent as plain text, and this turn's tool rounds are
+        # appended unchanged, so the history stays append-only.
+        system = [
+            {
+                "type": "text",
+                "text": self._stable_system_prompt(with_tools=bool(tool_definitions)),
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "text", "text": f"[Visual context: {context_note}]"},
+        ]
         messages = [{"role": t.role, "content": t.content} for t in history]
 
         try:
-            response = await self._client.messages.create(
-                model=self._config.model,
-                max_tokens=300,
-                system=system_prompt,
-                messages=messages,
-            )
-            reply = response.content[0].text
+            spoken: List[str] = []
+            reply = ""
+            for round_index in range(self._config.max_tool_rounds + 1):
+                response = await self._create_message(system, messages, tool_definitions)
+                if response.stop_reason == "refusal":
+                    details = getattr(response, "stop_details", None)
+                    logger.warning(
+                        "Claude declined the request (category: %s)",
+                        getattr(details, "category", None),
+                    )
+                    reply = REFUSAL_REPLY
+                    break
 
-            # Add assistant turn
-            history.append(ConversationTurn(role="assistant", content=reply))
+                text = " ".join(
+                    block.text.strip()
+                    for block in response.content
+                    if block.type == "text" and block.text.strip()
+                )
+                tool_uses = [block for block in response.content if block.type == "tool_use"]
+                if (
+                    response.stop_reason != "tool_use"
+                    or not tool_uses
+                    or round_index == self._config.max_tool_rounds
+                ):
+                    reply = text
+                    break
+
+                if text:
+                    spoken.append(text)
+                    if on_interim_text is not None:
+                        await on_interim_text(text)
+
+                messages.append({"role": "assistant", "content": response.content})
+                results = []
+                # Run in order: "look left, then tell me what you see" needs the
+                # head to move before the photo.
+                for block in tool_uses:
+                    logger.info("Claude tool: %s %s", block.name, block.input)
+                    outcome = await tools.execute(block.name, block.input, user_name=user_name)
+                    result = {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": outcome.content,
+                    }
+                    if outcome.is_error:
+                        result["is_error"] = True
+                    results.append(result)
+                messages.append({"role": "user", "content": results})
+
+            remembered = " ".join([*spoken, reply]).strip()
+            if remembered:
+                history.append(ConversationTurn(role="assistant", content=remembered))
 
             # Persist to database
             await self._save_turn(user_name, "user", user_text)
-            await self._save_turn(user_name, "assistant", reply)
+            if remembered:
+                await self._save_turn(user_name, "assistant", remembered)
 
             logger.info("AI response for %s: '%s'", user_name, reply[:80])
             return reply

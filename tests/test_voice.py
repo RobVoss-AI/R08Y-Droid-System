@@ -360,3 +360,28 @@ if __name__ == "__main__":
     test_rms_computation()
     test_rms_moderate_signal()
     print("All voice tests passed!")
+
+
+def test_follow_up_recording_waits_for_speech_and_keeps_its_start():
+    async def run():
+        voice = VoiceInput(
+            AudioConfig(chunk_size=1600, silence_duration=0.2, rms_threshold=500),
+            WakeWordConfig(engine="rms"),
+        )
+        voice.available = True
+        voice._running = True
+        quiet = struct.pack("<1600h", *([0] * 1600))
+        loud = struct.pack("<1600h", *([4000] * 1600))
+        chunks = iter([quiet, quiet, loud, loud, loud, quiet, quiet, quiet])
+        voice._read_chunk = lambda: next(chunks)
+
+        audio = await voice.record_speech(start_timeout=1.0)
+        assert audio is not None
+        # Pre-roll keeps the quiet lead-in and the opening loud chunks.
+        assert len(audio) > 44 + 5 * len(loud)
+
+        voice._read_chunk = lambda: quiet
+        assert await voice.record_speech(start_timeout=0.3) is None
+        voice._executor.shutdown(wait=False)
+
+    asyncio.run(run())

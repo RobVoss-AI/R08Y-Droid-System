@@ -1,8 +1,10 @@
 """R08Y Droid System — Main Orchestrator.
 
-Wires together all modules and runs two concurrent pipelines:
+Wires together all modules and runs concurrent pipelines:
 1. Vision pipeline (continuous): camera → face detection → tracking + recognition
-2. Voice pipeline (event-driven): wake → record → STT → Claude → TTS → loop
+2. Voice pipeline (event-driven): wake → record → STT → Claude (+ tools) → TTS,
+   then a short follow-up window that needs no wake word
+3. Battery pipeline (when the UPS HAT is enabled): periodic spoken warnings
 
 Shared state allows the voice pipeline to know who the droid is looking at,
 and the vision pipeline to hold tracking when the droid is speaking.
@@ -15,7 +17,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from r08y.config import load_config, validate_config, R08YConfig
+from r08y.config import load_config, validate_config, PowerConfig, R08YConfig
 from r08y.modules.camera import CameraCapture
 from r08y.modules.face_detector import FaceDetection, create_face_detector
 from r08y.modules.face_recognizer import FaceRecognizer, RecognitionResult
@@ -30,6 +32,8 @@ from r08y.modules.text_to_speech import TextToSpeech
 from r08y.modules.sensors import create_distance_sensor, create_light_sensors
 from r08y.modules.mobility import create_mobility_controller
 from r08y.modules.health import collect_runtime_health
+from r08y.modules.power import BatteryReading, BatteryWarnings, create_battery_monitor
+from r08y.modules.robot_tools import RobotTools
 from r08y.skills import SkillManager
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,7 @@ class DroidState:
     is_speaking: bool = False
     is_listening: bool = False
     hardware_status: Dict[str, dict] = field(default_factory=dict)
+    battery: Optional[BatteryReading] = None
 
 
 def setup_logging(config: R08YConfig) -> None:
@@ -139,8 +144,13 @@ async def voice_pipeline(
     state: DroidState,
     shutdown: asyncio.Event,
     skill_manager: Optional[SkillManager] = None,
+    tools: Optional[RobotTools] = None,
 ) -> None:
-    """Event-driven voice loop: wake → record → transcribe → think → speak."""
+    """Event-driven voice loop: wake → record → transcribe → think → speak.
+
+    After R08Y answers, it keeps listening for ``follow_up_seconds`` so the
+    conversation can continue without the wake word, as Reachy Mini does.
+    """
     if not voice_input.available:
         logger.warning("Voice input not available; voice pipeline disabled")
         await shutdown.wait()
@@ -153,6 +163,8 @@ async def voice_pipeline(
         await shutdown.wait()
         return
 
+    follow_up_seconds = float(getattr(interaction, "follow_up_seconds", 0.0))
+    barge_in_enabled = bool(getattr(interaction, "barge_in", False))
     logger.info(
         "Voice pipeline started; say '%s'",
         voice_input.wake_phrase,
@@ -161,46 +173,94 @@ async def voice_pipeline(
     async def set_interaction(state_name: InteractionState) -> None:
         await expression.set_interaction_state(state_name)
 
-    async def speak(text: str) -> None:
+    async def play_until_barge_in(speech) -> bool:
+        """Play speech while listening for the wake word; True if interrupted."""
+        speech_task = asyncio.ensure_future(speech)
+        wake_task = asyncio.ensure_future(voice_input.wait_for_wake())
+        try:
+            done, _ = await asyncio.wait(
+                {speech_task, wake_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if wake_task in done and wake_task.result():
+                logger.info("Barge-in: wake word heard while speaking")
+                tts.interrupt()
+                await speech_task
+                return True
+            await speech_task
+            return False
+        finally:
+            for task in (wake_task, speech_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(wake_task, speech_task, return_exceptions=True)
+
+    async def speak(
+        text: str,
+        *,
+        then: InteractionState = InteractionState.IDLE,
+        gesture: bool = True,
+        allow_barge_in: bool = False,
+    ) -> bool:
+        """Speak with body language; returns True if the listener barged in."""
         state.is_listening = False
 
         async def begin_body_language() -> None:
             state.is_speaking = True
             await set_interaction(InteractionState.SPEAKING)
-            await interaction.queue_response_gesture(text, expression)
+            if gesture:
+                await interaction.queue_response_gesture(text, expression)
 
+        speech = tts.speak_and_wait(
+            text,
+            on_playback_start=begin_body_language,
+        )
         try:
-            await tts.speak_and_wait(
-                text,
-                on_playback_start=begin_body_language,
-            )
+            if allow_barge_in and barge_in_enabled:
+                return await play_until_barge_in(speech)
+            await speech
+            return False
         finally:
             state.is_speaking = False
-            await set_interaction(InteractionState.IDLE)
+            await set_interaction(then)
 
+    follow_up = False
+    barged_in = False
     while not shutdown.is_set():
-        # Wait for wake word
         state.is_listening = False
-        await set_interaction(InteractionState.IDLE)
-        woke = await voice_input.wait_for_wake()
-        if not woke or shutdown.is_set():
-            break
-
-        # Interrupt any current speech
-        tts.interrupt()
-        await expression.cancel_motion()
-        state.is_listening = True
-        await set_interaction(InteractionState.LISTENING)
-        await interaction.acknowledge(tts, expression)
-        logger.info("Wake detected — recording speech")
-
-        # Record user speech
-        audio_bytes = await voice_input.record_speech()
-        if audio_bytes is None:
-            logger.warning("No speech recorded")
-            state.is_listening = False
+        if follow_up:
+            # Listen for a reply without the wake word.
+            follow_up = False
+            state.is_listening = True
+            await set_interaction(InteractionState.LISTENING)
+            audio_bytes = await voice_input.record_speech(start_timeout=follow_up_seconds)
+            if audio_bytes is None:
+                logger.info("Follow-up window closed; waiting for '%s'", voice_input.wake_phrase)
+                continue
+            is_follow_up = True
+        else:
+            # Wait for wake word (or go straight on after a barge-in)
             await set_interaction(InteractionState.IDLE)
-            continue
+            woke = True if barged_in else await voice_input.wait_for_wake()
+            barged_in = False
+            if not woke or shutdown.is_set():
+                break
+
+            # Interrupt any current speech
+            tts.interrupt()
+            await expression.cancel_motion()
+            state.is_listening = True
+            await set_interaction(InteractionState.LISTENING)
+            await interaction.acknowledge(tts, expression)
+            logger.info("Wake detected — recording speech")
+
+            # Record user speech
+            audio_bytes = await voice_input.record_speech()
+            if audio_bytes is None:
+                logger.warning("No speech recorded")
+                state.is_listening = False
+                await set_interaction(InteractionState.IDLE)
+                continue
+            is_follow_up = False
 
         state.is_listening = False
         await set_interaction(InteractionState.THINKING)
@@ -214,11 +274,17 @@ async def voice_pipeline(
         text = await stt.transcribe(audio_bytes)
         if not text:
             logger.warning("Empty transcription")
+            if is_follow_up:
+                # Background noise opened the window; go back to the wake word.
+                await set_interaction(InteractionState.IDLE)
+                continue
             await speak("I didn't catch that. Could you say it again?")
+            follow_up = follow_up_seconds > 0
             continue
 
         logger.info("User said: '%s'", text)
         user_name = state.recognized.name if state.recognized and state.recognized.is_known else "unknown"
+        follow_up = follow_up_seconds > 0
 
         # 1. Check skill commands first (plugin system)
         if skill_manager:
@@ -256,14 +322,69 @@ async def voice_pipeline(
             is_known=state.recognized.is_known if state.recognized else False,
         )
 
-        response = await brain.think(text, visual, user_name)
+        # Words Claude says before an action ("Let me look.") play while the
+        # action and the next model request run.
+        interim_speech: List[asyncio.Task] = []
+
+        async def say_interim(interim_text: str) -> None:
+            interim_speech.append(
+                asyncio.create_task(
+                    speak(interim_text, then=InteractionState.THINKING, gesture=False)
+                )
+            )
+
+        try:
+            response = await brain.think(
+                text, visual, user_name, tools=tools, on_interim_text=say_interim
+            )
+        finally:
+            if interim_speech:
+                await asyncio.gather(*interim_speech, return_exceptions=True)
 
         # Let skills transform response before TTS
         if skill_manager:
             response = await skill_manager.on_voice_post_ai(response)
 
-        # Speak the response
-        await speak(response)
+        if tools is not None and tools.conversation_ended:
+            follow_up = False
+
+        # Speak the response; a gesture-only answer needs no words.
+        if response and response.strip():
+            barged_in = await speak(
+                response,
+                gesture=not (tools is not None and tools.expressed),
+                allow_barge_in=True,
+            )
+            if barged_in:
+                follow_up = False
+        else:
+            await set_interaction(InteractionState.IDLE)
+
+
+async def battery_pipeline(
+    monitor,
+    tts: TextToSpeech,
+    state: DroidState,
+    shutdown: asyncio.Event,
+    config: PowerConfig,
+) -> None:
+    """Poll the UPS HAT and say a warning once per low-battery threshold."""
+    if not monitor.available:
+        await shutdown.wait()
+        return
+    warnings = BatteryWarnings(config)
+    while not shutdown.is_set():
+        reading = await monitor.read()
+        if reading is not None:
+            state.battery = reading
+            message = warnings.evaluate(reading)
+            if message:
+                logger.warning("Battery: %s", reading.describe())
+                await tts.speak(message)
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=config.poll_seconds)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def _handle_special_command(
@@ -336,6 +457,7 @@ async def _stop_runtime(
     brain,
     tts,
     expression=None,
+    battery=None,
 ) -> None:
     """Stop every component even when startup or one cleanup step fails."""
     logger.info("Shutting down...")
@@ -360,6 +482,7 @@ async def _stop_runtime(
         voice_input.stop(),
         brain.stop(),
         tts.stop(),
+        *([battery.stop()] if battery is not None else []),
         return_exceptions=True,
     )
     for result in results:
@@ -396,6 +519,9 @@ async def run(config_path: str = "config.yaml") -> None:
     distance = create_distance_sensor(config.distance)
     light_sensors = create_light_sensors(config.light_sensors)
     mobility = create_mobility_controller(config.mobility, distance)
+    battery = create_battery_monitor(config.power)
+    if config.interaction.speech_motion:
+        tts.set_envelope_listener(expression.set_speech_envelope)
 
     state = DroidState()
     shutdown = asyncio.Event()
@@ -426,6 +552,7 @@ async def run(config_path: str = "config.yaml") -> None:
             brain.start(),
             tts.start(),
             distance.start(),
+            battery.start(),
         )
         await expression.start()
         # The forward obstacle guard must initialize before the motors do.
@@ -441,6 +568,7 @@ async def run(config_path: str = "config.yaml") -> None:
             light_sensors=light_sensors,
             mobility=mobility,
             face_detector=face_detector,
+            battery=battery,
         )
         state.hardware_status = health.as_dict()
         logger.info("Hardware health: %s", health.summary())
@@ -486,6 +614,26 @@ async def run(config_path: str = "config.yaml") -> None:
             light_sensors=light_sensors,
         )
         await skill_manager.start_all()
+        robot_tools = RobotTools(
+            config.ai,
+            config.mobility,
+            expression=expression,
+            face_tracker=face_tracker,
+            camera=camera,
+            mobility=mobility,
+            distance=distance,
+            light_sensors=light_sensors,
+            battery=battery,
+            face_recognizer=face_recognizer,
+            state=state,
+            skill_manager=skill_manager,
+        )
+        if config.ai.tools_enabled:
+            logger.info("Claude can use: %s", ", ".join(robot_tools.names))
+        if battery.available:
+            logger.info("Battery monitor: %s", battery.detail)
+        elif config.power.ups_enabled:
+            logger.warning("Battery monitor unavailable: %s", battery.detail)
         logger.info(
             "All modules initialized — R08Y is online! (%d skills loaded)",
             len(skill_manager.loaded_skills),
@@ -529,10 +677,14 @@ async def run(config_path: str = "config.yaml") -> None:
                 state,
                 shutdown,
                 skill_manager,
+                robot_tools,
             )
         )
+        battery_task = asyncio.create_task(
+            battery_pipeline(battery, tts, state, shutdown, config.power)
+        )
         shutdown_task = asyncio.create_task(shutdown.wait())
-        runtime_tasks = [vision_task, voice_task, shutdown_task]
+        runtime_tasks = [vision_task, voice_task, battery_task, shutdown_task]
 
         done, _ = await asyncio.wait(runtime_tasks, return_when=asyncio.FIRST_COMPLETED)
         if shutdown_task not in done:
@@ -560,4 +712,5 @@ async def run(config_path: str = "config.yaml") -> None:
             brain=brain,
             tts=tts,
             expression=expression,
+            battery=battery,
         )
